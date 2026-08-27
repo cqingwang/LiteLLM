@@ -5316,6 +5316,17 @@
     "Zero retention": "零数据保留",
     "Zhipu": "智谱",
     "Zhipu V4": "智谱 V4",
-    "Zoom": "缩放"
+    "Zoom": "缩放",
+    "Detailed Information": "详细信息",
+    "Request Log Details": "请求日志详情",
+    "Copy ID": "复制 ID",
+    "Request Headers": "请求头",
+    "Response Headers": "响应头",
+    "Request Body": "请求体",
+    "Response Body": "响应体",
+    "Content was truncated": "内容已截断",
+    "No content": "暂无内容",
+    "Method": "方法",
+    "Failed to load log details": "加载日志详情失败"
   }
 }

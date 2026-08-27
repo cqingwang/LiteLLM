@@ -27,6 +27,7 @@ import type {
   GetMidjourneyLogsParams,
   GetTaskLogsParams,
   UserInfo,
+  RequestLogDetail,
 } from './types'
 
 // ============================================================================
@@ -83,6 +84,13 @@ export const getLogStats = (params: GetLogStatsParams = {}) =>
 export const getUserLogStats = (
   params: Omit<GetLogStatsParams, 'username' | 'channel'> = {}
 ) => fetchLogStats('/api/log', params, false)
+
+export async function getLogDetail(
+  detailId: string
+): Promise<{ success: boolean; message?: string; data?: RequestLogDetail }> {
+  const res = await api.get(`/api/log/detail/${encodeURIComponent(detailId)}`)
+  return res.data
+}
 
 export async function getUserInfo(
   userId: number

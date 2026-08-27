@@ -1,3 +1,4 @@
+import { Link } from '@tanstack/react-router'
 /*
 Copyright (C) 2023-2026 QuantumNous
 
@@ -788,6 +789,30 @@ export function useCommonLogsColumns(isAdmin: boolean): ColumnDef<UsageLog>[] {
       maxSize: 200,
     }
   )
+
+  columns.push({
+    id: 'request_detail',
+    header: t('Detailed Information'),
+    accessorFn: (row) => row.detail_id,
+    cell: ({ row }) => {
+      const detailId = row.original.detail_id
+      if (!detailId) {
+        return <span className='text-muted-foreground/50'>—</span>
+      }
+      return (
+        <Link
+          to='/usage-logs/detail/$detailId'
+          params={{ detailId }}
+          className='text-primary text-xs hover:underline'
+        >
+          {t('View details')}
+        </Link>
+      )
+    },
+    enableSorting: false,
+    enableColumnFilter: false,
+    size: 120,
+  })
 
   return columns
 }

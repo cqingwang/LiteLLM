@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 
@@ -8,6 +9,7 @@ import (
 	"github.com/QuantumNous/new-api/model"
 
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 )
 
 func GetAllLogs(c *gin.Context) {
@@ -53,6 +55,25 @@ func GetUserLogs(c *gin.Context) {
 	pageInfo.SetItems(logs)
 	common.ApiSuccess(c, pageInfo)
 	return
+}
+
+func GetRequestLogDetail(c *gin.Context) {
+	detailId := c.Param("detail_id")
+	if detailId == "" {
+		c.JSON(http.StatusNotFound, gin.H{"success": false, "message": "日志详情不存在"})
+		return
+	}
+	userId := c.GetInt("id")
+	detail, err := model.GetRequestLogDetailForUser(detailId, userId, model.IsAdmin(userId))
+	if err != nil {
+		status := http.StatusNotFound
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			status = http.StatusInternalServerError
+		}
+		c.JSON(status, gin.H{"success": false, "message": "日志详情不存在"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true, "message": "", "data": detail})
 }
 
 // Deprecated: SearchAllLogs 已废弃，前端未使用该接口。

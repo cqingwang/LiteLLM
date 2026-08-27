@@ -69,6 +69,14 @@ func geminiRelayHandler(c *gin.Context, info *relaycommon.RelayInfo) *types.NewA
 }
 
 func Relay(c *gin.Context, relayFormat types.RelayFormat) {
+	var detailWriter *service.RequestLogDetailWriter
+	if relayFormat != types.RelayFormatOpenAIRealtime {
+		detailWriter = &service.RequestLogDetailWriter{ResponseWriter: c.Writer}
+		c.Writer = detailWriter
+		c.Set("request_log_detail_id", model.NewRequestLogDetailId())
+		c.Set("request_log_detail_start_time", time.Now())
+		defer service.SaveCapturedRequestLogDetail(c, detailWriter)
+	}
 
 	requestId := c.GetString(common.RequestIdKey)
 	//group := common.GetContextKeyString(c, constant.ContextKeyUsingGroup)

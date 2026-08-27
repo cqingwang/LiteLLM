@@ -5316,6 +5316,17 @@
     "Zero retention": "Aucune rétention",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "Detailed Information": "Detailed Information",
+    "Request Log Details": "Request Log Details",
+    "Copy ID": "Copy ID",
+    "Request Headers": "Request Headers",
+    "Response Headers": "Response Headers",
+    "Request Body": "Request Body",
+    "Response Body": "Response Body",
+    "Content was truncated": "Content was truncated",
+    "No content": "No content",
+    "Method": "Method",
+    "Failed to load log details": "Failed to load log details"
   }
 }

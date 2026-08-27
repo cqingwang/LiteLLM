@@ -31,6 +31,32 @@ import type { UsageLog } from './data/schema'
  */
 export type LogCategory = 'common' | 'drawing' | 'task'
 
+export interface RequestLogDetail {
+  id: string
+  log_id: number
+  user_id: number
+  request_id: string
+  upstream_request_id: string
+  request_method: string
+  request_path: string
+  request_content_type: string
+  response_content_type: string
+  request_headers: string
+  response_headers: string
+  request_body: string
+  response_body: string
+  error_body: string
+  request_size: number
+  response_size: number
+  status_code: number
+  duration_ms: number
+  is_stream: boolean
+  request_truncated: boolean
+  response_truncated: boolean
+  created_at: number
+  updated_at: number
+}
+
 // ============================================================================
 // Filter Types
 // ============================================================================

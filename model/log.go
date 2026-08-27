@@ -77,6 +77,7 @@ type Log struct {
 	Ip                string `json:"ip" gorm:"index;default:''"`
 	RequestId         string `json:"request_id,omitempty" gorm:"type:varchar(64);index:idx_logs_request_id;default:''"`
 	UpstreamRequestId string `json:"upstream_request_id,omitempty" gorm:"type:varchar(128);index:idx_logs_upstream_request_id;default:''"`
+	DetailId          string `json:"detail_id,omitempty" gorm:"type:varchar(64);index;default:''"`
 	Other             string `json:"other"`
 }
 
@@ -317,11 +318,15 @@ func RecordErrorLog(c *gin.Context, userId int, channelId int, modelName string,
 		}(),
 		RequestId:         requestId,
 		UpstreamRequestId: upstreamRequestId,
+		DetailId:          c.GetString("request_log_detail_id"),
 		Other:             otherStr,
 	}
 	err := createLog(log)
 	if err != nil {
 		logger.LogError(c, "failed to record log: "+err.Error())
+	} else {
+		c.Set("request_log_recorded", true)
+		c.Set("request_log_id", log.Id)
 	}
 }
 
@@ -338,11 +343,15 @@ type RecordConsumeLogParams struct {
 	IsStream         bool                   `json:"is_stream"`
 	Group            string                 `json:"group"`
 	Other            map[string]interface{} `json:"other"`
+	DetailId         string                 `json:"detail_id"`
 }
 
 func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams) {
 	if !common.LogConsumeEnabled {
 		return
+	}
+	if params.DetailId == "" {
+		params.DetailId = c.GetString("request_log_detail_id")
 	}
 	logger.LogInfo(c, fmt.Sprintf("record consume log: userId=%d, params=%s", userId, common.GetJsonString(params)))
 	username := c.GetString("username")
@@ -381,11 +390,15 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 		}(),
 		RequestId:         requestId,
 		UpstreamRequestId: upstreamRequestId,
+		DetailId:          params.DetailId,
 		Other:             otherStr,
 	}
 	err := createLog(log)
 	if err != nil {
 		logger.LogError(c, "failed to record log: "+err.Error())
+	} else {
+		c.Set("request_log_recorded", true)
+		c.Set("request_log_id", log.Id)
 	}
 	if common.DataExportEnabled {
 		LogQuotaData(QuotaDataLogParams{

@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { zodResolver } from '@hookform/resolvers/zod'
+import { useQueryClient } from '@tanstack/react-query'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
@@ -143,6 +144,7 @@ export function LogSettingsSection({
   defaultEnabled,
 }: LogSettingsSectionProps) {
   const { t } = useTranslation()
+  const queryClient = useQueryClient()
   const updateOption = useUpdateOption()
   const form = useForm<LogSettingsFormValues>({
     resolver: zodResolver(logSettingsSchema),
@@ -151,9 +153,7 @@ export function LogSettingsSection({
     },
   })
 
-  const [purgeDate, setPurgeDate] = useState<Date | undefined>(() =>
-    getDateDaysAgo(30)
-  )
+  const [purgeDate, setPurgeDate] = useState<Date | undefined>(() => new Date())
   const [isStartingLogCleanup, setIsStartingLogCleanup] = useState(false)
   const [logCleanupTask, setLogCleanupTask] = useState<LogCleanupTask | null>(
     null
@@ -163,6 +163,8 @@ export function LogSettingsSection({
   const [serverLogCleanupMode, setServerLogCleanupMode] = useState('by_count')
   const [serverLogCleanupValue, setServerLogCleanupValue] = useState(10)
   const [serverLogCleanupLoading, setServerLogCleanupLoading] = useState(false)
+  const [serverLogCleanupDialogOpen, setServerLogCleanupDialogOpen] =
+    useState(false)
 
   const fetchServerLogInfo = useCallback(async () => {
     try {
@@ -241,6 +243,10 @@ export function LogSettingsSection({
                 ? t('{{count}} log entries removed.', { count })
                 : t('No log entries matched the selected time.')
             )
+            await queryClient.invalidateQueries({ queryKey: ['logs'] })
+            await queryClient.invalidateQueries({
+              queryKey: ['usage-logs-stats'],
+            })
           } else if (res.data.status === 'failed') {
             toast.error(res.data.error || t('Failed to clean logs'))
           }
@@ -254,7 +260,7 @@ export function LogSettingsSection({
       cancelled = true
       window.clearInterval(interval)
     }
-  }, [logCleanupActive, logCleanupTaskId, t])
+  }, [logCleanupActive, logCleanupTaskId, queryClient, t])
 
   const onSubmit = async (values: LogSettingsFormValues) => {
     if (values.LogConsumeEnabled === defaultEnabled) return
@@ -323,6 +329,7 @@ export function LogSettingsSection({
             size: formatBytes(freed_bytes),
           })
         )
+        setServerLogCleanupDialogOpen(false)
       } else {
         toast.error(res.data.message || t('Cleanup failed'))
       }
@@ -521,7 +528,10 @@ export function LogSettingsSection({
                     className='w-[120px]'
                   />
                 </div>
-                <AlertDialog>
+                <AlertDialog
+                  open={serverLogCleanupDialogOpen}
+                  onOpenChange={setServerLogCleanupDialogOpen}
+                >
                   <AlertDialogTrigger
                     render={
                       <Button

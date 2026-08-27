@@ -414,6 +414,10 @@ func runLogCleanupTask(ctx context.Context, task *model.SystemTask, runnerID str
 	if state.Total < state.Processed {
 		state.Total = state.Processed
 	}
+	if err := model.DeleteOldRequestLogDetails(ctx, payload.TargetTimestamp); err != nil {
+		failSystemTask(task, runnerID, err)
+		return
+	}
 	if err := model.UpdateSystemTaskState(task.TaskID, runnerID, state); err != nil {
 		logSystemTaskLockError(ctx, task, err)
 		return

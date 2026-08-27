@@ -88,6 +88,11 @@ export type DataTablePageProps<TData> = {
   isLoading?: boolean
 
   /**
+   * 刷新已有数据时是否禁用表格交互，默认启用；需要在后台刷新期间保持可用的只读操作可关闭此选项。
+   */
+  disableInteractionWhileFetching?: boolean
+
+  /**
    * Refetch / background loading — dims the table without removing rows.
    */
   isFetching?: boolean
@@ -407,7 +412,10 @@ function renderMobile<TData>(
     return null
   }
 
-  const isFetchingOnly = props.isFetching && !props.isLoading
+  const isFetchingOnly =
+    props.disableInteractionWhileFetching !== false &&
+    props.isFetching &&
+    !props.isLoading
   const ownGetRowClassName = props.getRowClassName
   const mobileGetRowClassName =
     props.mobileProps?.getRowClassName ??
@@ -487,7 +495,10 @@ function renderDesktop<TData>(
     return null
   }
 
-  const isFetchingOnly = props.isFetching && !props.isLoading
+  const isFetchingOnly =
+    props.disableInteractionWhileFetching !== false &&
+    props.isFetching &&
+    !props.isLoading
   const fixedHeight = props.fixedHeight !== false
 
   if (cardViewActive && viewMode === DATA_TABLE_VIEW_MODES.CARD) {
