@@ -14,6 +14,10 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useCopyToClipboard } from '@/hooks/use-copy-to-clipboard'
 
 import { getLogDetail } from '../api'
+import {
+  getRequestLogDetailDisplayBody,
+  isJsonLikeErrorBody,
+} from '../lib/request-detail'
 
 function isJsonPayload(body: string, contentType: string): boolean {
   if (contentType.toLowerCase().includes('json')) return true
@@ -23,14 +27,6 @@ function isJsonPayload(body: string, contentType: string): boolean {
     return true
   } catch {
     return false
-  }
-}
-
-function formatJsonPayload(body: string): string {
-  try {
-    return JSON.stringify(JSON.parse(body), null, 2)
-  } catch {
-    return body
   }
 }
 
@@ -115,14 +111,20 @@ function PayloadPanel(props: {
   body: string
   contentType: string
   truncated: boolean
+  statusCode?: number
 }) {
   const { t } = useTranslation()
   const { copyToClipboard } = useCopyToClipboard()
-  const isJson = isJsonPayload(props.body, props.contentType)
-  const isEventStream = props.contentType
-    .toLowerCase()
-    .includes('text/event-stream')
-  const displayBody = isJson ? formatJsonPayload(props.body) : props.body
+  const isErrorResponse = (props.statusCode ?? 0) >= 400
+  const isJson =
+    isJsonPayload(props.body, props.contentType) ||
+    (isErrorResponse && isJsonLikeErrorBody(props.body))
+  const isEventStream =
+    props.contentType.toLowerCase().includes('text/event-stream') && !isJson
+  const displayBody = getRequestLogDetailDisplayBody(
+    props.body,
+    isErrorResponse
+  )
   return (
     <section className='flex min-h-0 flex-1 flex-col rounded-lg border'>
       <div className='flex items-center justify-between border-b px-4 py-3'>
@@ -334,6 +336,7 @@ export function RequestLogDetailPage(props: {
               body={detail.response_body || detail.error_body}
               contentType={detail.response_content_type}
               truncated={detail.response_truncated}
+              statusCode={detail.status_code}
             />
           </div>
         </TabsContent>

@@ -1,4 +1,3 @@
-import { Link } from '@tanstack/react-router'
 /*
 Copyright (C) 2023-2026 QuantumNous
 
@@ -51,6 +50,7 @@ import {
   isViolationFeeLog,
   renderAuditContent,
 } from '../../lib/format'
+import { buildRequestLogDetailHref } from '../../lib/request-detail'
 import {
   isDisplayableLogType,
   isTimingLogType,
@@ -800,13 +800,12 @@ export function useCommonLogsColumns(isAdmin: boolean): ColumnDef<UsageLog>[] {
         return <span className='text-muted-foreground/50'>—</span>
       }
       return (
-        <Link
-          to='/usage-logs/detail/$detailId'
-          params={{ detailId }}
+        <a
+          href={buildRequestLogDetailHref(detailId)}
           className='text-primary text-xs hover:underline'
         >
           {t('View details')}
-        </Link>
+        </a>
       )
     },
     enableSorting: false,

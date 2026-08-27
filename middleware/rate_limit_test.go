@@ -45,6 +45,38 @@ func performRateLimitRequest(router http.Handler, path string, remoteAddr string
 	return recorder
 }
 
+func TestGlobalWebRateLimitSkipsStaticAssets(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	_, _ = useRateLimitMiniRedis(t)
+
+	previousEnabled := common.GlobalWebRateLimitEnable
+	previousMaxRequests := common.GlobalWebRateLimitNum
+	previousDuration := common.GlobalWebRateLimitDuration
+	common.GlobalWebRateLimitEnable = true
+	common.GlobalWebRateLimitNum = 1
+	common.GlobalWebRateLimitDuration = 60
+	t.Cleanup(func() {
+		common.GlobalWebRateLimitEnable = previousEnabled
+		common.GlobalWebRateLimitNum = previousMaxRequests
+		common.GlobalWebRateLimitDuration = previousDuration
+	})
+
+	router := gin.New()
+	router.Use(GlobalWebRateLimit())
+	router.GET("/static/js/chunk.js", func(c *gin.Context) {
+		c.Status(http.StatusOK)
+	})
+	router.GET("/usage-logs/common", func(c *gin.Context) {
+		c.Status(http.StatusOK)
+	})
+
+	remoteAddr := "192.0.2.70:12345"
+	assert.Equal(t, http.StatusOK, performRateLimitRequest(router, "/static/js/chunk.js", remoteAddr).Code)
+	assert.Equal(t, http.StatusOK, performRateLimitRequest(router, "/static/js/chunk.js", remoteAddr).Code)
+	assert.Equal(t, http.StatusOK, performRateLimitRequest(router, "/usage-logs/common", remoteAddr).Code)
+	assert.Equal(t, http.StatusTooManyRequests, performRateLimitRequest(router, "/usage-logs/common", remoteAddr).Code)
+}
+
 func TestRedisIPRateLimiterThresholdTTLAndNamespace(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	redisServer, _ := useRateLimitMiniRedis(t)
