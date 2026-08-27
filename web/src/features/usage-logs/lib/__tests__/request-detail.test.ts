@@ -31,6 +31,12 @@ describe('request log detail navigation', () => {
     )
   })
 
+  test('adds the session ID to a detail URL without changing the route', () => {
+    expect(buildRequestLogDetailHref('detail-1', 'session/id')).toBe(
+      '/usage-logs/detail/detail-1?session_id=session%2Fid'
+    )
+  })
+
   test('preserves the original error response body for syntax highlighting', () => {
     const body = '{"error":{"message":"Unexpected reasoning effort high."}}'
 

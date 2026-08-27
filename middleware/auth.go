@@ -95,6 +95,51 @@ func UserAuth() func(c *gin.Context) {
 	}
 }
 
+// UserAuthOrSessionQuery 支持日志详情接口使用 dashboard bearer token 或链接显式携带的 session ID。
+// URL 凭据只在安装此中间件的接口生效，不作为通用 dashboard 鉴权凭据接受。
+func UserAuthOrSessionQuery() func(c *gin.Context) {
+	return func(c *gin.Context) {
+		sid := strings.TrimSpace(c.Query("session_id"))
+		if sid == "" {
+			authHelper(c, common.RoleCommonUser)
+			return
+		}
+		session, err := model.GetUserSessionCached(sid)
+		if err != nil {
+			if errors.Is(err, model.ErrUserSessionInactive) {
+				err = service.ErrLoginSessionRevoked
+			}
+			writeDashboardAuthError(c, err)
+			return
+		}
+		identity := service.AuthIdentity{
+			UserID:          session.UserID,
+			SessionID:       session.SID,
+			UserAuthVersion: session.UserAuthVersion,
+			SessionVersion:  session.Version,
+		}
+		_, user, err := service.ValidateLoginSession(identity)
+		if err != nil {
+			writeDashboardAuthError(c, err)
+			return
+		}
+		if user.Status != common.UserStatusEnabled {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"success": false, "code": "AUTH_USER_DISABLED", "message": common.TranslateMessage(c, i18n.MsgAuthUserBanned)})
+			return
+		}
+		if user.Role < common.RoleCommonUser {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"success": false, "code": "AUTH_INSUFFICIENT_PRIVILEGE", "message": common.TranslateMessage(c, i18n.MsgAuthInsufficientPrivilege)})
+			return
+		}
+		if !validUserInfo(user.Username, user.Role) {
+			writeDashboardAuthError(c, service.ErrAuthTokenInvalid)
+			return
+		}
+		setDashboardAuthContext(c, user, identity, false)
+		c.Next()
+	}
+}
+
 func AdminAuth() func(c *gin.Context) {
 	return func(c *gin.Context) {
 		authHelper(c, common.RoleAdminUser)

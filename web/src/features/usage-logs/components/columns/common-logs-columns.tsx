@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import type { ColumnDef } from '@tanstack/react-table'
+import { Link } from '@tanstack/react-router'
 import { GitBranch, Sparkles, KeyRound } from 'lucide-react'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -39,6 +40,7 @@ import { getUserAvatarFallback, getUserAvatarStyle } from '@/lib/avatar'
 import { formatBillingCurrencyFromUSD } from '@/lib/currency'
 import { formatLogQuota, formatTimestampToDate } from '@/lib/format'
 import { cn } from '@/lib/utils'
+import { useAuthStore } from '@/stores/auth-store'
 
 import { LOG_TYPE_ALL_VALUE } from '../../constants'
 import type { UsageLog } from '../../data/schema'
@@ -50,7 +52,6 @@ import {
   isViolationFeeLog,
   renderAuditContent,
 } from '../../lib/format'
-import { buildRequestLogDetailHref } from '../../lib/request-detail'
 import {
   isDisplayableLogType,
   isTimingLogType,
@@ -286,6 +287,7 @@ function buildTypeDetailSegments(
 
 export function useCommonLogsColumns(isAdmin: boolean): ColumnDef<UsageLog>[] {
   const { t } = useTranslation()
+  const sessionId = useAuthStore((state) => state.auth.session?.sid)
   const columns: ColumnDef<UsageLog>[] = [
     {
       accessorKey: 'created_at',
@@ -800,12 +802,14 @@ export function useCommonLogsColumns(isAdmin: boolean): ColumnDef<UsageLog>[] {
         return <span className='text-muted-foreground/50'>—</span>
       }
       return (
-        <a
-          href={buildRequestLogDetailHref(detailId)}
+        <Link
+          to='/usage-logs/detail/$detailId'
+          params={{ detailId }}
+          search={sessionId ? { session_id: sessionId } : {}}
           className='text-primary text-xs hover:underline'
         >
           {t('View details')}
-        </a>
+        </Link>
       )
     },
     enableSorting: false,

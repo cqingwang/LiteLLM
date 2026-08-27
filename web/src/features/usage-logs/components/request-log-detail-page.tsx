@@ -236,6 +236,7 @@ function HeaderPreview(props: {
 
 export function RequestLogDetailPage(props: {
   detailId: string
+  sessionId?: string
   onBack: () => void
 }) {
   const { t } = useTranslation()
@@ -243,7 +244,7 @@ export function RequestLogDetailPage(props: {
   const query = useQuery({
     queryKey: ['request-log-detail', props.detailId],
     queryFn: async () => {
-      const result = await getLogDetail(props.detailId)
+      const result = await getLogDetail(props.detailId, props.sessionId)
       if (!result.success || !result.data) {
         throw new Error(result.message || t('Failed to load log details'))
       }

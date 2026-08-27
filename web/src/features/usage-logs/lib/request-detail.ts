@@ -16,8 +16,14 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-export function buildRequestLogDetailHref(detailId: string): string {
-  return `/usage-logs/detail/${encodeURIComponent(detailId)}`
+export function buildRequestLogDetailHref(
+  detailId: string,
+  sessionId?: string
+): string {
+  const href = `/usage-logs/detail/${encodeURIComponent(detailId)}`
+  return sessionId
+    ? `${href}?session_id=${encodeURIComponent(sessionId)}`
+    : href
 }
 
 export function getRequestLogDetailDisplayBody(

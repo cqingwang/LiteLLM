@@ -86,9 +86,13 @@ export const getUserLogStats = (
 ) => fetchLogStats('/api/log', params, false)
 
 export async function getLogDetail(
-  detailId: string
+  detailId: string,
+  sessionId?: string
 ): Promise<{ success: boolean; message?: string; data?: RequestLogDetail }> {
-  const res = await api.get(`/api/log/detail/${encodeURIComponent(detailId)}`)
+  const query = sessionId ? `?session_id=${encodeURIComponent(sessionId)}` : ''
+  const res = await api.get(
+    `/api/log/detail/${encodeURIComponent(detailId)}${query}`
+  )
   return res.data
 }
 

@@ -105,6 +105,64 @@ func TestUserAuthAllowsOpaqueDottedPAT(t *testing.T) {
 	assert.Equal(t, user.Id, body.ID)
 }
 
+func TestUserAuthOrSessionQueryAcceptsActiveSessionOnlyForTheScopedRoute(t *testing.T) {
+	setupDashboardAuthMiddlewareTest(t)
+	user := &model.User{
+		Username: "session-query-user", Password: "password-placeholder", Role: common.RoleCommonUser,
+		Status: common.UserStatusEnabled, Group: "default", AuthVersion: 1,
+		AffCode: "middleware-aff-session-query-user",
+	}
+	require.NoError(t, model.DB.Create(user).Error)
+	now := time.Now().Unix()
+	activeSession := &model.UserSession{
+		SID: "scoped-detail-session", UserID: user.Id, Version: 1,
+		UserAuthVersion: user.AuthVersion, Status: model.UserSessionStatusActive,
+		RefreshHash: "refresh-hash", LoginMethod: "password", LastActiveAt: now,
+		ExpiresAt: now + 3600,
+	}
+	expiredSession := *activeSession
+	expiredSession.SID = "expired-detail-session"
+	expiredSession.ExpiresAt = now - 1
+	require.NoError(t, model.CreateUserSession(activeSession))
+	require.NoError(t, model.DB.Create(&expiredSession).Error)
+
+	router := gin.New()
+	router.GET("/detail", UserAuthOrSessionQuery(), func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"id": c.GetInt("id")})
+	})
+
+	tests := []struct {
+		name          string
+		sessionID     string
+		wantStatus    int
+		wantErrorCode string
+	}{
+		{name: "active session", sessionID: activeSession.SID, wantStatus: http.StatusOK},
+		{name: "missing session", wantStatus: http.StatusUnauthorized, wantErrorCode: "AUTH_UNAUTHORIZED"},
+		{name: "expired session", sessionID: expiredSession.SID, wantStatus: http.StatusUnauthorized, wantErrorCode: "AUTH_SESSION_REVOKED"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			path := "/detail"
+			if test.sessionID != "" {
+				path += "?session_id=" + test.sessionID
+			}
+			response := httptest.NewRecorder()
+			router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
+			assert.Equal(t, test.wantStatus, response.Code)
+			if test.wantErrorCode != "" {
+				assert.Contains(t, response.Body.String(), test.wantErrorCode)
+			}
+		})
+	}
+
+	request := httptest.NewRequest(http.MethodGet, "/detail?session_id="+activeSession.SID, nil)
+	request.Header.Set("Authorization", "Bearer invalid-token")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	assert.Equal(t, http.StatusOK, response.Code)
+}
+
 func TestUserAuthNeverFallsBackForRecognizedInvalidInternalJWT(t *testing.T) {
 	setupDashboardAuthMiddlewareTest(t)
 	identity := service.AuthIdentity{UserID: 42, SessionID: "session-42", UserAuthVersion: 1, SessionVersion: 1}
