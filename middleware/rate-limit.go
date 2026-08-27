@@ -162,7 +162,7 @@ func GlobalWebRateLimit() func(c *gin.Context) {
 	if common.GlobalWebRateLimitEnable {
 		webRateLimiter := rateLimitFactory(common.GlobalWebRateLimitNum, common.GlobalWebRateLimitDuration, "GW")
 		return func(c *gin.Context) {
-			if isStaticWebAssetRequest(c.Request.URL.Path) {
+			if isUnthrottledWebRequest(c) {
 				c.Next()
 				return
 			}
@@ -172,8 +172,15 @@ func GlobalWebRateLimit() func(c *gin.Context) {
 	return defNext
 }
 
-func isStaticWebAssetRequest(path string) bool {
-	return path == "/favicon.ico" || path == "/robots.txt" || strings.HasPrefix(path, "/static/")
+func isUnthrottledWebRequest(c *gin.Context) bool {
+	path := c.Request.URL.Path
+	if path == "/favicon.ico" || path == "/robots.txt" || strings.HasPrefix(path, "/static/") {
+		return true
+	}
+	if c.Request.Method != http.MethodGet && c.Request.Method != http.MethodHead {
+		return false
+	}
+	return strings.Contains(strings.ToLower(c.GetHeader("Accept")), "text/html")
 }
 
 func GlobalAPIRateLimit() func(c *gin.Context) {

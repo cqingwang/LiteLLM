@@ -69,10 +69,19 @@ func TestGlobalWebRateLimitSkipsStaticAssets(t *testing.T) {
 	router.GET("/usage-logs/common", func(c *gin.Context) {
 		c.Status(http.StatusOK)
 	})
+	router.GET("/", func(c *gin.Context) {
+		c.Status(http.StatusOK)
+	})
 
 	remoteAddr := "192.0.2.70:12345"
 	assert.Equal(t, http.StatusOK, performRateLimitRequest(router, "/static/js/chunk.js", remoteAddr).Code)
 	assert.Equal(t, http.StatusOK, performRateLimitRequest(router, "/static/js/chunk.js", remoteAddr).Code)
+	htmlRequest := httptest.NewRequest(http.MethodGet, "/", nil)
+	htmlRequest.Header.Set("Accept", "text/html,application/xhtml+xml")
+	htmlRequest.RemoteAddr = remoteAddr
+	htmlResponse := httptest.NewRecorder()
+	router.ServeHTTP(htmlResponse, htmlRequest)
+	assert.Equal(t, http.StatusOK, htmlResponse.Code)
 	assert.Equal(t, http.StatusOK, performRateLimitRequest(router, "/usage-logs/common", remoteAddr).Code)
 	assert.Equal(t, http.StatusTooManyRequests, performRateLimitRequest(router, "/usage-logs/common", remoteAddr).Code)
 }
