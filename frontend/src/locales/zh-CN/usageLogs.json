@@ -1,8 +1,10 @@
 {
   "usageLogs.columns.totalTokens": "总词元",
   "usageLogs.columns.inputLabel": "输入:",
+  "usageLogs.columns.inputShort": "输入",
   "usageLogs.columns.outputLabel": "输出:",
-  "usageLogs.columns.promptCachedTokens": "输入缓存词元",
+  "usageLogs.columns.outputShort": "输出",
+  "usageLogs.columns.promptCachedTokens": "缓存",
   "usageLogs.columns.writeCacheTokens": "写入缓存词元",
   "usageLogs.columns.totalCost": "总费用",
   "usageLogs.source.api": "API",

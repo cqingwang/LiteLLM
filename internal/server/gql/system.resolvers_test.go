@@ -2,6 +2,7 @@ package gql
 
 import (
 	"context"
+	"os"
 	"testing"
 
 	"github.com/samber/lo"
@@ -10,6 +11,7 @@ import (
 	"github.com/looplj/axonhub/internal/authz"
 	"github.com/looplj/axonhub/internal/ent"
 	"github.com/looplj/axonhub/internal/ent/enttest"
+	"github.com/looplj/axonhub/internal/objects"
 	"github.com/looplj/axonhub/internal/pkg/xcache"
 	"github.com/looplj/axonhub/internal/server/biz"
 )
@@ -176,6 +178,51 @@ func TestMutationResolver_UpdateSystemChannelSettings_MergesPrompts(t *testing.T
 	require.NoError(t, err)
 	require.Equal(t, "You are a helpful assistant.", setting.TestSystemPrompt)
 	require.Equal(t, "updated user", setting.TestUserPrompt)
+}
+
+func TestMutationResolver_UpdateQuotaRoutingSettings_RoundTrips(t *testing.T) {
+	resolver, ctx, client := setupTestSystemMutationResolver(t)
+	defer client.Close()
+
+	mode := objects.QuotaRoutingModeBackpressure
+	ok, err := resolver.UpdateQuotaRoutingSettings(ctx, UpdateQuotaRoutingSettingsInput{DefaultMode: &mode})
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	settings, err := resolver.systemService.QuotaRoutingSettings(ctx)
+	require.NoError(t, err)
+	require.Equal(t, objects.QuotaRoutingModeBackpressure, settings.DefaultMode)
+
+	ok, err = resolver.UpdateQuotaRoutingSettings(ctx, UpdateQuotaRoutingSettingsInput{})
+	require.NoError(t, err)
+	require.True(t, ok)
+	settings, err = resolver.systemService.QuotaRoutingSettings(ctx)
+	require.NoError(t, err)
+	require.Equal(t, objects.QuotaRoutingModeBackpressure, settings.DefaultMode)
+}
+
+func TestMutationResolver_UpdateQuotaRoutingSettings_RejectsUnauthorizedCaller(t *testing.T) {
+	resolver, _, client := setupTestSystemMutationResolver(t)
+	defer client.Close()
+
+	_, err := resolver.UpdateQuotaRoutingSettings(context.Background(), UpdateQuotaRoutingSettingsInput{})
+	require.ErrorContains(t, err, "permission denied: requires write_settings scope")
+}
+
+func TestUpdateQuotaRoutingSettingsInput_RejectsInvalidEnum(t *testing.T) {
+	ec := &executionContext{}
+
+	_, err := ec.unmarshalInputUpdateQuotaRoutingSettingsInput(context.Background(), map[string]any{
+		"defaultMode": "INVALID_MODE",
+	})
+	require.Error(t, err)
+}
+
+func TestSystemSchema_DoesNotExposeQuotaEnforcementAPI(t *testing.T) {
+	schema, err := os.ReadFile("system.graphql")
+	require.NoError(t, err)
+	require.NotContains(t, string(schema), "QuotaEnforcementMode")
+	require.NotContains(t, string(schema), "QuotaEnforcementSettings")
 }
 
 func TestUpdateSystemChannelSettingsInput_PromptPresence(t *testing.T) {

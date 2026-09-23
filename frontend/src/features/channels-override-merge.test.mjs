@@ -18,7 +18,7 @@ const transpiledMerge = ts.transpileModule(mergeSource, {
   },
 }).outputText;
 const mergeModuleUrl = `data:text/javascript;base64,${Buffer.from(transpiledMerge).toString('base64')}`;
-const { mergeOverrideOperations } = await import(mergeModuleUrl);
+const { mergeChannelSettingsForUpdate, mergeOverrideOperations } = await import(mergeModuleUrl);
 
 test('set_if_absent participates in scalar body override replacement', () => {
   const setIfAbsent = { op: 'set_if_absent', path: 'max_output_tokens', value: '32000' };
@@ -51,7 +51,7 @@ test('scalar body override replacement removes existing duplicates', () => {
   );
 });
 
-test('last template scalar body override at the same path wins', () => {
+test('template scalar body overrides at the same path remain ordered', () => {
   assert.deepEqual(
     mergeOverrideOperations(
       [{ op: 'set', path: 'temperature', value: '0.5' }],
@@ -62,9 +62,27 @@ test('last template scalar body override at the same path wins', () => {
     ),
     [
       { op: 'set', path: 'temperature', value: '0.5' },
+      { op: 'set_if_absent', path: 'max_output_tokens', value: '32000' },
       { op: 'set', path: 'max_output_tokens', value: '16000' },
     ]
   );
+});
+
+test('template preserves conditional scalar body overrides at the same path', () => {
+  const sessionFallback = {
+    op: 'set_if_absent',
+    path: 'client_metadata.x-codex-window-id',
+    value: '{{index .RequestHeader "X-Claude-Code-Session-Id"}}:0',
+    condition: '{{ne (index .RequestHeader "X-Claude-Code-Session-Id") ""}}',
+  };
+  const interactionFallback = {
+    op: 'set_if_absent',
+    path: 'client_metadata.x-codex-window-id',
+    value: '{{index .RequestHeader "X-Interaction-Id"}}:0',
+    condition: '{{ne (index .RequestHeader "X-Interaction-Id") ""}}',
+  };
+
+  assert.deepEqual(mergeOverrideOperations([], [sessionFallback, interactionFallback]), [sessionFallback, interactionFallback]);
 });
 
 test('set_if_absent is exposed as a localized body-only operation', () => {
@@ -83,4 +101,24 @@ test('set_if_absent is exposed as a localized body-only operation', () => {
     assert.ok(messages['channels.dialogs.settings.overrides.body.opSetIfAbsent']);
     assert.ok(messages['channels.dialogs.settings.overrides.validation.missingValue']);
   }
+});
+test('mergeChannelSettingsForUpdate preserves quotaRoutingMode through a patch merge', () => {
+  const existing = {
+    extraModelPrefix: 'prefix-',
+    quotaRoutingMode: 'BACKPRESSURE',
+  };
+
+  // Patch touching unrelated keys must retain the existing routing mode.
+  const merged = mergeChannelSettingsForUpdate(existing, { lowercaseModelId: true });
+  assert.equal(merged.quotaRoutingMode, 'BACKPRESSURE');
+  assert.equal(merged.lowercaseModelId, true);
+  assert.equal(merged.extraModelPrefix, 'prefix-');
+
+  // Explicit patch value wins.
+  const overridden = mergeChannelSettingsForUpdate(existing, { quotaRoutingMode: 'IGNORE_QUOTA' });
+  assert.equal(overridden.quotaRoutingMode, 'IGNORE_QUOTA');
+
+  // No existing mode stays unset so the backend keeps its INHERIT semantics.
+  const unset = mergeChannelSettingsForUpdate({ extraModelPrefix: 'x' }, {});
+  assert.equal(unset.quotaRoutingMode, undefined);
 });

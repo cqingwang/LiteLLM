@@ -1,4 +1,4 @@
-import { useCallback, useState, memo, useRef, useEffect } from 'react';
+import { useCallback, useMemo, useState, memo, useRef, useEffect } from 'react';
 import { format } from 'date-fns';
 import { DotsHorizontalIcon } from '@radix-ui/react-icons';
 import { ColumnDef, Row, Table } from '@tanstack/react-table';
@@ -11,7 +11,6 @@ import {
   IconArchive,
   IconTrash,
   IconCheck,
-  IconWeight,
   IconTransform,
   IconNetwork,
   IconAdjustments,
@@ -47,13 +46,49 @@ import { useChannels } from '../context/channels-context';
 import { useTestChannel, useUpdateChannel } from '../data/channels';
 import { CHANNEL_CONFIGS, getProvider } from '../data/config_channels';
 import { Channel } from '../data/schema';
+import { parseQuotaLimits } from '../../system/data/quotas';
+import type { QuotaRoutingMode } from '../../system/data/system';
+import { getChannelQuotaRoutingIndicator } from '../utils/quota-routing-status';
 import { ChannelHealthCell } from './channel-health-cell';
 import { ChannelLimiterCell } from './channel-limiter-cell';
 import { ChannelsStatusDialog } from './channels-status-dialog';
+import { ChatProtocolIcon, MessagesProtocolIcon, ResponsesProtocolIcon } from './endpoint-protocol-icons';
+import { RELAY_PROTOCOLS, RELAY_PROTOCOL_LABEL_KEYS, getChannelRelayProtocols, type RelayProtocol } from '../data/relay-protocols';
 
 const WEIGHT_PRECISION = 4;
 const MIN_WEIGHT = 0;
 const MAX_WEIGHT = 100;
+const QUOTA_VISIBLE_LIMIT = 5;
+
+const QUOTA_WINDOW_LABEL_KEYS: Record<string, string> = {
+  '5h': 'quota.window.5h',
+  '7d': 'quota.window.7d',
+  '30d': 'quota.window.30d',
+  daily: 'quota.window.daily',
+  weekly: 'quota.window.weekly',
+  monthly: 'quota.window.monthly',
+  pay_as_you_go: 'quota.label.token_usage',
+  credits: 'quota.label.credits_remaining',
+  cycle: 'quota.window.cycle',
+  overage: 'quota.label.overage_window',
+};
+
+function getQuotaLimits(channel: Channel) {
+  return channel.providerQuotaStatus ? parseQuotaLimits(channel.providerQuotaStatus.quotaData) : [];
+}
+
+function quotaWindowLabel(window: string | undefined, t: ReturnType<typeof useTranslation>['t']): string {
+  if (!window) return '';
+  const translationKey = QUOTA_WINDOW_LABEL_KEYS[window];
+  if (translationKey) return t(translationKey);
+  return window === 'primary' || window === 'secondary' ? t('quota.label.token_usage') : window;
+}
+
+const quotaColor = (remaining: number) => {
+  if (remaining <= 20) return 'text-red-500';
+  if (remaining <= 50) return 'text-yellow-500';
+  return 'text-green-600 dark:text-green-500';
+};
 
 const formatWeight = (value: number) => Number(value.toFixed(WEIGHT_PRECISION));
 const clampWeight = (value: number) => formatWeight(Math.min(MAX_WEIGHT, Math.max(MIN_WEIGHT, value)));
@@ -95,16 +130,14 @@ const ActionCell = memo(({ row }: { row: Row<Channel> }) => {
   const { channelPermissions } = usePermissions();
   const testChannel = useTestChannel();
   const isArchived = channel.status === 'archived';
-  const hasError = !!channel.errorMessage;
+  const hasError = channel.errorMessage != null;
   const hasDisabledAPIKeys = channelPermissions.canWrite && (channel.disabledAPIKeys?.length ?? 0) > 0;
 
-  const handleDefaultTest = async () => {
-    try {
-      await testChannel.mutateAsync({
-        channelID: channel.id,
-        modelID: channel.defaultTestModel || undefined,
-      });
-    } catch (_error) {}
+  const handleDefaultTest = () => {
+    testChannel.mutate({
+      channelID: channel.id,
+      modelID: channel.defaultTestModel || undefined,
+    });
   };
 
   const handleOpenTestDialog = useCallback(() => {
@@ -211,15 +244,17 @@ const ActionCell = memo(({ row }: { row: Row<Channel> }) => {
             <IconGauge size={16} className='mr-2' />
             {t('channels.dialogs.rateLimit.action')}
           </DropdownMenuItem>
-          <DropdownMenuItem
-            onClick={() => {
-              setCurrentRow(channel);
-              setOpen('endpoints');
-            }}
-          >
-            <IconPlugConnected size={16} className='mr-2' />
-            {t('channels.endpoints.title')}
-          </DropdownMenuItem>
+          {channel.type !== 'xai_subscription' && (
+            <DropdownMenuItem
+              onClick={() => {
+                setCurrentRow(channel);
+                setOpen('endpoints');
+              }}
+            >
+              <IconPlugConnected size={16} className='mr-2' />
+              {t('channels.endpoints.title')}
+            </DropdownMenuItem>
+          )}
           {channelPermissions.canWrite && (
             <DropdownMenuItem
               onClick={() => {
@@ -336,13 +371,14 @@ function getProxyURLSummary(proxyURL: string): { label: string; detail?: string 
 }
 
 // Memoized cell components to avoid recreating on every render
-const NameCell = memo(({ row }: { row: Row<Channel> }) => {
+const NameCell = memo(({ row, globalDefaultMode }: { row: Row<Channel>; globalDefaultMode?: QuotaRoutingMode }) => {
   const { t } = useTranslation();
   const channel = row.original;
-  const hasError = !!channel.errorMessage;
+  const hasError = channel.errorMessage != null;
   const disabledKeysCount = channel.disabledAPIKeys?.length ?? 0;
   const hasDisabledKeys = disabledKeysCount > 0;
   const websiteURL = getChannelWebsiteURL(channel.baseURL);
+  const quotaRoutingIndicator = getChannelQuotaRoutingIndicator(channel, globalDefaultMode);
 
   const nameElement = websiteURL ? (
     <a
@@ -358,20 +394,29 @@ const NameCell = memo(({ row }: { row: Row<Channel> }) => {
     <div className={cn('truncate font-medium', hasError && 'text-destructive')}>{row.getValue('name')}</div>
   );
 
-  // Both indicators are shown independently: a channel disabled because every
-  // credential is unavailable carries an error *and* disabled credentials, and
-  // hiding the key icon behind the error would lose the reason it went down.
   const content = (
-    <div className='flex justify-center'>
-      <div className='flex max-w-56 items-center gap-2'>
+    <div className='flex min-w-0 justify-start'>
+      <div className='flex min-w-0 max-w-56 items-center gap-2'>
+        {nameElement}
         {hasError && <IconAlertTriangle className='text-destructive h-4 w-4 shrink-0' />}
         {hasDisabledKeys && <IconKeyOff className='h-4 w-4 shrink-0 text-amber-500' />}
-        {nameElement}
+        {quotaRoutingIndicator === 'exhausted' && (
+          <>
+            <IconCoin className='h-4 w-4 shrink-0 text-destructive' aria-hidden='true' />
+            <span className='sr-only'>{t('quota.status.exhausted')}</span>
+          </>
+        )}
+        {quotaRoutingIndicator === 'backpressure' && (
+          <>
+            <IconGauge className='h-4 w-4 shrink-0 text-amber-500' aria-hidden='true' />
+            <span className='sr-only'>{t('quota.status.backpressure')}</span>
+          </>
+        )}
       </div>
     </div>
   );
 
-  if (!hasError && !hasDisabledKeys) {
+  if (!hasError && !hasDisabledKeys && !quotaRoutingIndicator) {
     return content;
   }
 
@@ -390,6 +435,8 @@ const NameCell = memo(({ row }: { row: Row<Channel> }) => {
           {hasDisabledKeys && (
             <p className='text-sm text-amber-500'>{t('channels.actions.disabledAPIKeys', { count: disabledKeysCount })}</p>
           )}
+          {quotaRoutingIndicator === 'exhausted' && <p className='text-destructive text-sm'>{t('quota.status.exhausted')}</p>}
+          {quotaRoutingIndicator === 'backpressure' && <p className='text-sm text-amber-500'>{t('quota.status.backpressure')}</p>}
         </div>
       </TooltipContent>
     </Tooltip>
@@ -417,6 +464,86 @@ const ProviderCell = memo(({ row }: { row: Row<Channel> }) => {
 });
 
 ProviderCell.displayName = 'ProviderCell';
+
+const QuotaCell = memo(({ row }: { row: Row<Channel> }) => {
+  const { t } = useTranslation();
+  const [isExpanded, setIsExpanded] = useState(false);
+  const channel = row.original;
+
+  if (!channel.providerQuotaStatus) {
+    return (
+      <div className='flex justify-center'>
+        <span className='text-muted-foreground text-xs'>{t('quota.label.unavailable')}</span>
+      </div>
+    );
+  }
+
+  const limits = getQuotaLimits(channel);
+  if (limits.length === 0) {
+    return (
+      <div className='flex justify-center'>
+        <span className='text-muted-foreground text-xs'>{t('quota.label.unavailable')}</span>
+      </div>
+    );
+  }
+
+  const visibleLimits = isExpanded ? limits : limits.slice(0, QUOTA_VISIBLE_LIMIT);
+  const hiddenCount = limits.length - QUOTA_VISIBLE_LIMIT;
+  const content = (
+    <div className='flex min-w-0 flex-col items-stretch gap-1.5 text-[11px]'>
+      {visibleLimits.map((limit, index) => {
+        const usageRatio = limit.usageRatio;
+        const remaining = Math.round(Math.max(0, Math.min(100, 100 - usageRatio * 100)));
+        const label = quotaWindowLabel(limit.window, t) || t('quota.label.quota');
+        return (
+          <div key={`${label}-${index}`} className='flex min-w-0 items-center gap-1'>
+            <span className='text-muted-foreground w-20 shrink-0 truncate text-left'>{label}</span>
+            <div className='bg-muted h-1.5 min-w-0 flex-1 overflow-hidden rounded-full'>
+              <div
+                className={`h-full ${remaining <= 20 ? 'bg-red-500' : remaining <= 50 ? 'bg-yellow-500' : 'bg-green-500'}`}
+                style={{ width: `${remaining}%` }}
+              />
+            </div>
+            <span className={`w-9 shrink-0 text-right font-medium ${quotaColor(remaining)}`}>{remaining}%</span>
+          </div>
+        );
+      })}
+      {hiddenCount > 0 && (
+        <button
+          type='button'
+          className='text-primary hover:text-primary/80 mt-0.5 self-end text-xs font-medium hover:underline'
+          aria-expanded={isExpanded}
+          onClick={(event) => {
+            event.stopPropagation();
+            setIsExpanded((expanded) => !expanded);
+          }}
+        >
+          {isExpanded ? t('channels.quota.collapse') : t('channels.quota.expand', { count: hiddenCount })}
+        </button>
+      )}
+    </div>
+  );
+
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>{content}</TooltipTrigger>
+      <TooltipContent className='space-y-1'>
+        <div className='font-medium'>{t(`quota.status.${channel.providerQuotaStatus.status}`)}</div>
+        {limits.map((limit, index) => {
+          const usageRatio = limit.usageRatio;
+          const remaining = Math.round(Math.max(0, Math.min(100, 100 - usageRatio * 100)));
+          return (
+            <div key={`${limit.window}-${index}`} className='text-xs'>
+              {quotaWindowLabel(limit.window, t) || t('quota.label.quota')}: {remaining}%
+            </div>
+          );
+        })}
+      </TooltipContent>
+    </Tooltip>
+  );
+});
+
+QuotaCell.displayName = 'QuotaCell';
 
 const TagsCell = memo(({ row }: { row: Row<Channel> }) => {
   const tags = (row.getValue('tags') as string[]) || [];
@@ -507,8 +634,8 @@ const SupportedModelsCell = memo(({ row }: { row: Row<Channel> }) => {
   }, [channel, setCurrentRow, setOpen]);
 
   return (
-    <div className='flex items-center justify-center gap-2'>
-      <div className='flex flex-wrap justify-center gap-1 overflow-hidden'>
+    <div className='flex min-w-0 items-center justify-center gap-2'>
+      <div className='flex min-w-0 flex-wrap justify-center gap-1 overflow-hidden'>
         {models.slice(0, 5).map((model) => (
           <Badge key={model} variant='secondary' className='block max-w-48 truncate text-left text-xs'>
             {model}
@@ -530,6 +657,68 @@ const SupportedModelsCell = memo(({ row }: { row: Row<Channel> }) => {
 });
 
 SupportedModelsCell.displayName = 'SupportedModelsCell';
+
+const RELAY_PROTOCOL_ICONS: Record<RelayProtocol, React.ComponentType<{ size?: number | string; className?: string }>> = {
+  'openai/chat_completions': ChatProtocolIcon,
+  'openai/responses': ResponsesProtocolIcon,
+  'anthropic/messages': MessagesProtocolIcon,
+};
+
+const RELAY_PROTOCOL_ACTIVE_CLASSES: Record<RelayProtocol, string> = {
+  'openai/chat_completions': 'border-sky-500/30 bg-sky-500/15 text-sky-600 dark:text-sky-400',
+  'openai/responses': 'border-violet-500/30 bg-violet-500/15 text-violet-600 dark:text-violet-400',
+  'anthropic/messages': 'border-amber-500/30 bg-amber-500/15 text-amber-600 dark:text-amber-400',
+};
+
+/**
+ * Renders the three relay protocols as icons. Configured protocols are colored,
+ * the rest are dimmed, so a channel that speaks all three is recognizable at a
+ * glance.
+ */
+const EndpointProtocolsCell = memo(({ channel }: { channel: Channel }) => {
+  const { t } = useTranslation();
+  const protocols = useMemo(
+    () => getChannelRelayProtocols(channel.defaultEndpoints, channel.endpoints),
+    [channel.defaultEndpoints, channel.endpoints]
+  );
+
+  return (
+    <div className='flex items-center justify-center gap-1.5'>
+      {RELAY_PROTOCOLS.map((protocol) => {
+        const active = protocols.has(protocol);
+        const Icon = RELAY_PROTOCOL_ICONS[protocol];
+        const label = t(RELAY_PROTOCOL_LABEL_KEYS[protocol]);
+
+        return (
+          <Tooltip key={protocol}>
+            <TooltipTrigger asChild>
+              <span
+                className={cn(
+                  'flex size-6 items-center justify-center rounded-md border transition-colors',
+                  active ? RELAY_PROTOCOL_ACTIVE_CLASSES[protocol] : 'border-border/60 bg-muted/40 text-muted-foreground/35'
+                )}
+                role='img'
+                aria-label={label}
+                data-testid={`endpoint-protocol-${protocol}`}
+              >
+                <Icon size={14} />
+              </span>
+            </TooltipTrigger>
+            <TooltipContent>
+              <span className='font-medium'>{label}</span>
+              <span className='text-muted-foreground'>
+                {' \u00b7 '}
+                {t(active ? 'channels.endpoints.detect.configured' : 'channels.endpoints.detect.notConfigured')}
+              </span>
+            </TooltipContent>
+          </Tooltip>
+        );
+      })}
+    </div>
+  );
+});
+
+EndpointProtocolsCell.displayName = 'EndpointProtocolsCell';
 
 const OrderingWeightCell = memo(({ row }: { row: Row<Channel> }) => {
   const channel = row.original;
@@ -645,7 +834,11 @@ const CreatedAtCell = memo(({ row }: { row: Row<Channel> }) => {
 
 CreatedAtCell.displayName = 'CreatedAtCell';
 
-export const createColumns = (t: ReturnType<typeof useTranslation>['t'], canWrite: boolean = true): ColumnDef<Channel>[] => {
+export const createColumns = (
+  t: ReturnType<typeof useTranslation>['t'],
+  canWrite: boolean = true,
+  globalDefaultMode?: QuotaRoutingMode
+): ColumnDef<Channel>[] => {
   return [
     {
       id: 'expand',
@@ -682,7 +875,7 @@ export const createColumns = (t: ReturnType<typeof useTranslation>['t'], canWrit
               </div>
             ),
             meta: {
-              className: 'text-center',
+              className: 'w-10 text-center',
             },
             enableSorting: false,
             enableHiding: false,
@@ -691,10 +884,10 @@ export const createColumns = (t: ReturnType<typeof useTranslation>['t'], canWrit
       : []),
     {
       accessorKey: 'name',
-      header: ({ column }) => <DataTableColumnHeader column={column} title={t('common.columns.name')} className='justify-center' />,
-      cell: NameCell,
+      header: ({ column }) => <DataTableColumnHeader column={column} title={t('common.columns.name')} />,
+      cell: ({ row }: { row: Row<Channel> }) => <NameCell row={row} globalDefaultMode={globalDefaultMode} />,
       meta: {
-        className: 'md:table-cell min-w-48 text-center',
+        className: 'w-[13%] min-w-0 text-left',
       },
       enableHiding: false,
       enableSorting: true,
@@ -705,7 +898,7 @@ export const createColumns = (t: ReturnType<typeof useTranslation>['t'], canWrit
       header: ({ column }) => <DataTableColumnHeader column={column} title={t('channels.columns.provider')} className='justify-center' />,
       cell: ProviderCell,
       meta: {
-        className: 'text-center',
+         className: 'w-[9%] min-w-0 text-center',
       },
       filterFn: (row, _id, value) => {
         return value.includes(row.original.type);
@@ -718,10 +911,21 @@ export const createColumns = (t: ReturnType<typeof useTranslation>['t'], canWrit
       header: ({ column }) => <DataTableColumnHeader column={column} title={t('common.columns.status')} className='justify-center' />,
       cell: StatusSwitchCell,
       meta: {
-        className: 'text-center',
+         className: 'w-[8%] min-w-0 text-center',
       },
       enableSorting: true,
       enableHiding: false,
+    },
+    {
+      id: 'quota',
+      accessorFn: (row) => row.providerQuotaStatus?.status ?? '',
+      header: ({ column }) => <DataTableColumnHeader column={column} title={t('channels.columns.quota')} className='justify-center' />,
+      cell: QuotaCell,
+      meta: {
+         className: 'hidden w-[23%] min-w-0 2xl:table-cell text-center',
+      },
+      enableSorting: false,
+      enableHiding: true,
     },
 
     {
@@ -729,7 +933,7 @@ export const createColumns = (t: ReturnType<typeof useTranslation>['t'], canWrit
       header: ({ column }) => <DataTableColumnHeader column={column} title={t('channels.columns.tags')} className='justify-center' />,
       cell: TagsCell,
       meta: {
-        className: 'text-center',
+        className: 'hidden min-w-0 xl:table-cell text-center',
       },
       filterFn: (row, id, value) => {
         const tags = (row.getValue(id) as string[]) || [];
@@ -757,9 +961,22 @@ export const createColumns = (t: ReturnType<typeof useTranslation>['t'], canWrit
       ),
       cell: SupportedModelsCell,
       meta: {
-        className: 'max-w-64 text-center',
+         className: 'w-[20%] min-w-0 max-w-none text-center',
       },
       enableSorting: false,
+    },
+    {
+      id: 'endpointProtocols',
+      accessorFn: (row) => Array.from(getChannelRelayProtocols(row.defaultEndpoints, row.endpoints)).join(','),
+      header: ({ column }) => (
+        <DataTableColumnHeader column={column} title={t('channels.columns.endpointProtocols')} className='justify-center' />
+      ),
+      cell: ({ row }: { row: Row<Channel> }) => <EndpointProtocolsCell channel={row.original} />,
+      meta: {
+        className: 'w-24 min-w-24 text-center',
+      },
+      enableSorting: false,
+      enableHiding: true,
     },
     {
       id: 'proxy',
@@ -767,7 +984,7 @@ export const createColumns = (t: ReturnType<typeof useTranslation>['t'], canWrit
       header: ({ column }) => <DataTableColumnHeader column={column} title={t('channels.columns.proxy')} className='justify-center' />,
       cell: ProxyCell,
       meta: {
-        className: 'w-32 min-w-32 text-center',
+        className: 'hidden min-w-0 2xl:table-cell text-center',
       },
       enableSorting: false,
       enableHiding: true,
@@ -787,7 +1004,7 @@ export const createColumns = (t: ReturnType<typeof useTranslation>['t'], canWrit
         );
       },
       meta: {
-        className: 'text-center',
+        className: 'w-32 min-w-32 text-center',
       },
       enableSorting: false,
       enableHiding: true,
@@ -799,7 +1016,7 @@ export const createColumns = (t: ReturnType<typeof useTranslation>['t'], canWrit
       ),
       cell: OrderingWeightCell,
       meta: {
-        className: 'w-20 min-w-20 text-center',
+        className: 'w-28 min-w-28 text-center',
       },
       sortingFn: 'alphanumeric',
       enableSorting: true,
@@ -810,7 +1027,7 @@ export const createColumns = (t: ReturnType<typeof useTranslation>['t'], canWrit
       header: ({ column }) => <DataTableColumnHeader column={column} title={t('common.columns.createdAt')} className='justify-center' />,
       cell: CreatedAtCell,
       meta: {
-        className: 'text-center',
+        className: 'hidden w-28 min-w-28 xl:table-cell text-center',
       },
       enableSorting: true,
       enableHiding: false,
@@ -824,7 +1041,7 @@ export const createColumns = (t: ReturnType<typeof useTranslation>['t'], canWrit
             ),
             cell: ActionCell,
             meta: {
-              className: 'text-center',
+              className: 'w-44 min-w-44 text-center',
             },
             enableSorting: false,
             enableHiding: false,

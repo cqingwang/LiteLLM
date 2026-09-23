@@ -8,6 +8,7 @@
 !*.*
 !Makefile
 !LICENSE
+!/NOTICE
 !Dockerfile
 !VERSION
 
@@ -168,4 +169,5 @@ config.schema.json
 .playwright-mcp/
 .ace-tool/
 .omx/
+deploy_dev.sh
 *.tar.gz

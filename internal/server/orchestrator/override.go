@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"mime"
 	"net/http"
 	"strings"
 	"text/template"
@@ -155,9 +156,33 @@ func applyOverrideRequestBody(outbound *PersistentOutboundTransformer) pipeline.
 			return request, nil
 		}
 
+		// Body override operations are implemented with sjson, which silently discards a
+		// non-JSON document and rebuilds it as a fresh JSON object. Applying them to a
+		// multipart body (image edit/variation, transcription, ...) would replace the whole
+		// payload with a tiny JSON object while the Content-Type still advertises the
+		// multipart boundary, so the upstream sees a truncated form.
+		if !bodyOverrideSupported(request) {
+			log.Warn(ctx, "skipping body override operations for non-JSON request body",
+				log.String("channel", channel.Name),
+				log.Int("channel_id", channel.ID),
+				log.String("content_type", requestContentType(request)),
+				log.String("api_format", request.APIFormat),
+			)
+
+			return request, nil
+		}
+
 		llmReq := outbound.state.LlmRequest
 		renderCtx := buildRenderContext(llmReq, outbound.state.OriginalModel)
 		body := request.Body
+
+		// The outbound body is produced by format transformation, so a field the client
+		// sent may not survive it. set_if_absent also consults the original inbound body
+		// so such a field still counts as present (see applyBodySetIfAbsent).
+		var originalBody []byte
+		if llmReq.RawRequest != nil && gjson.ValidBytes(llmReq.RawRequest.Body) {
+			originalBody = llmReq.RawRequest.Body
+		}
 
 		for _, op := range ops {
 			if strings.EqualFold(op.Path, "stream") {
@@ -171,7 +196,7 @@ func applyOverrideRequestBody(outbound *PersistentOutboundTransformer) pipeline.
 
 			var err error
 
-			body, err = applyBodyOperation(ctx, body, op, renderCtx)
+			body, err = applyBodyOperation(ctx, body, op, renderCtx, originalBody)
 			if err != nil {
 				log.Warn(ctx, "failed to apply override operation",
 					log.String("channel", channel.Name),
@@ -198,11 +223,54 @@ func applyOverrideRequestBody(outbound *PersistentOutboundTransformer) pipeline.
 	})
 }
 
+// requestContentType returns the effective outbound Content-Type, preferring the
+// explicit field and falling back to the header.
+func requestContentType(request *httpclient.Request) string {
+	if request == nil {
+		return ""
+	}
+
+	if request.ContentType != "" {
+		return request.ContentType
+	}
+
+	return request.Headers.Get("Content-Type")
+}
+
+// bodyOverrideSupported reports whether channel body override operations can safely be
+// applied to the outbound request body. Only JSON bodies are patchable: sjson treats any
+// non-JSON input as an empty document and returns a freshly built object, which would
+// destroy multipart and binary payloads.
+func bodyOverrideSupported(request *httpclient.Request) bool {
+	if request == nil || len(request.Body) == 0 {
+		return false
+	}
+
+	contentType := requestContentType(request)
+	if contentType != "" {
+		mediaType, _, err := mime.ParseMediaType(contentType)
+		if err == nil && !isJSONMediaType(mediaType) {
+			return false
+		}
+	}
+
+	return gjson.ValidBytes(request.Body)
+}
+
+func isJSONMediaType(mediaType string) bool {
+	mediaType = strings.ToLower(mediaType)
+
+	return mediaType == "application/json" ||
+		mediaType == "text/json" ||
+		strings.HasSuffix(mediaType, "+json")
+}
+
 func applyBodyOperation(
 	ctx context.Context,
 	body []byte,
 	op objects.OverrideOperation,
 	renderCtx RenderContext,
+	originalBody []byte,
 ) ([]byte, error) {
 	if !evaluateCondition(ctx, op.Condition, renderCtx) {
 		return body, nil
@@ -212,7 +280,7 @@ func applyBodyOperation(
 	case objects.OverrideOpSet:
 		return applyBodySet(ctx, body, op, renderCtx)
 	case objects.OverrideOpSetIfAbsent:
-		return applyBodySetIfAbsent(ctx, body, op, renderCtx)
+		return applyBodySetIfAbsent(ctx, body, op, renderCtx, originalBody)
 	case objects.OverrideOpDelete:
 		return applyBodyDelete(body, op)
 	case objects.OverrideOpRename:
@@ -256,10 +324,22 @@ func applyBodySetIfAbsent(
 	body []byte,
 	op objects.OverrideOperation,
 	renderCtx RenderContext,
+	originalBody []byte,
 ) ([]byte, error) {
 	existing := gjson.GetBytes(body, op.Path)
 	if existing.Exists() || existing.Raw == "null" {
 		return body, nil
+	}
+
+	// A field the client sent may have been dropped or remapped by format
+	// transformation, so it can be absent from the outbound body even though the
+	// client provided it. Treat a field present in the original inbound body as
+	// present, keeping set_if_absent a default that clients can override.
+	if len(originalBody) > 0 {
+		original := gjson.GetBytes(originalBody, op.Path)
+		if original.Exists() || original.Raw == "null" {
+			return body, nil
+		}
 	}
 
 	return applyBodySet(ctx, body, op, renderCtx)

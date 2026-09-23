@@ -49,9 +49,14 @@ func TestGetProviderType_ExistingTypesPreserved(t *testing.T) {
 	}{
 		{"claudecode", channel.TypeClaudecode, "claudecode"},
 		{"codex", channel.TypeCodex, "codex"},
+		{"xai_subscription", channel.TypeXaiSubscription, "xai_subscription"},
 		{"github_copilot", channel.TypeGithubCopilot, "github_copilot"},
 		{"nanogpt", channel.TypeNanogpt, "nanogpt"},
 		{"nanogpt_responses", channel.TypeNanogptResponses, "nanogpt"},
+		{"zhipu", channel.TypeZhipu, "zhipu"},
+		{"zhipu_anthropic", channel.TypeZhipuAnthropic, "zhipu"},
+		{"zai", channel.TypeZai, "zai"},
+		{"zai_anthropic", channel.TypeZaiAnthropic, "zai"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -109,6 +109,12 @@ func zhipuQuotaBaseFromChannelURL(baseURL string) string {
 }
 
 func parseZhipuQuotaResponse(body []byte) (QuotaData, error) {
+	return parseZhipuFamilyQuotaResponse(body, "zhipu")
+}
+
+// parseZhipuFamilyQuotaResponse parses the ZhiPu-family quota API payload
+// (shared by open.bigmodel.cn and api.z.ai) under the given provider type.
+func parseZhipuFamilyQuotaResponse(body []byte, providerType string) (QuotaData, error) {
 	var response zhipuQuotaResponse
 	if err := json.Unmarshal(body, &response); err != nil {
 		return QuotaData{}, fmt.Errorf("failed to parse zhipu quota response: %w", err)
@@ -142,6 +148,8 @@ func parseZhipuQuotaResponse(body []byte) (QuotaData, error) {
 	// 5h window reports no reset time at 0% usage). When all entries have a
 	// reset time, trust API return order: index 0 → five_hour, index 1 → weekly.
 	windowNames := []string{"five_hour", "weekly_limit"}
+	windowLabels := []string{QuotaWindow5h, QuotaWindowWeekly}
+	windowLengths := []time.Duration{5 * time.Hour, 7 * 24 * time.Hour}
 	ordered := orderZhipuBuckets(tokenLimits)
 
 	overallStatus := "available"
@@ -168,7 +176,8 @@ func parseZhipuQuotaResponse(body []byte) (QuotaData, error) {
 			}
 		}
 
-		limits = append(limits, NewTokenLimitStatus(status, ratio, resetAt))
+		limits = append(limits, NewTokenLimitStatus(status, ratio, resetAt).
+			WithWindow(windowLabels[i], windowLengths[i]))
 		overallStatus = worseZhipuStatus(overallStatus, status)
 
 		var resetAtStr *string
@@ -190,14 +199,14 @@ func parseZhipuQuotaResponse(body []byte) (QuotaData, error) {
 		"level": response.Data.Level,
 	}
 
-	return QuotaData{
+	return NormalizeQuotaData(QuotaData{
 		Status:       overallStatus,
-		ProviderType: "zhipu",
+		ProviderType: providerType,
 		RawData:      rawData,
 		NextResetAt:  nextResetAt,
 		Ready:        IsReadyStatus(overallStatus),
 		Limits:       limits,
-	}, nil
+	}), nil
 }
 
 func zhipuStatusForRatio(ratio float64) string {

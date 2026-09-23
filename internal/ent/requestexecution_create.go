@@ -150,9 +150,29 @@ func (_c *RequestExecutionCreate) SetNillableReasoningEffort(v *string) *Request
 	return _c
 }
 
+// SetChannelAPIKeySuffix sets the "channel_api_key_suffix" field.
+func (_c *RequestExecutionCreate) SetChannelAPIKeySuffix(v string) *RequestExecutionCreate {
+	_c.mutation.SetChannelAPIKeySuffix(v)
+	return _c
+}
+
+// SetNillableChannelAPIKeySuffix sets the "channel_api_key_suffix" field if the given value is not nil.
+func (_c *RequestExecutionCreate) SetNillableChannelAPIKeySuffix(v *string) *RequestExecutionCreate {
+	if v != nil {
+		_c.SetChannelAPIKeySuffix(*v)
+	}
+	return _c
+}
+
 // SetRequestBody sets the "request_body" field.
 func (_c *RequestExecutionCreate) SetRequestBody(v objects.JSONRawMessage) *RequestExecutionCreate {
 	_c.mutation.SetRequestBody(v)
+	return _c
+}
+
+// SetResponseHeaders sets the "response_headers" field.
+func (_c *RequestExecutionCreate) SetResponseHeaders(v objects.JSONRawMessage) *RequestExecutionCreate {
+	_c.mutation.SetResponseHeaders(v)
 	return _c
 }
 
@@ -261,12 +281,6 @@ func (_c *RequestExecutionCreate) SetNillableMetricsReasoningDurationMs(v *int64
 // SetRequestHeaders sets the "request_headers" field.
 func (_c *RequestExecutionCreate) SetRequestHeaders(v objects.JSONRawMessage) *RequestExecutionCreate {
 	_c.mutation.SetRequestHeaders(v)
-	return _c
-}
-
-// SetResponseHeaders sets the "response_headers" field.
-func (_c *RequestExecutionCreate) SetResponseHeaders(v objects.JSONRawMessage) *RequestExecutionCreate {
-	_c.mutation.SetResponseHeaders(v)
 	return _c
 }
 
@@ -393,6 +407,11 @@ func (_c *RequestExecutionCreate) check() error {
 	if _, ok := _c.mutation.Format(); !ok {
 		return &ValidationError{Name: "format", err: errors.New(`ent: missing required field "RequestExecution.format"`)}
 	}
+	if v, ok := _c.mutation.ChannelAPIKeySuffix(); ok {
+		if err := requestexecution.ChannelAPIKeySuffixValidator(v); err != nil {
+			return &ValidationError{Name: "channel_api_key_suffix", err: fmt.Errorf(`ent: validator failed for field "RequestExecution.channel_api_key_suffix": %w`, err)}
+		}
+	}
 	if _, ok := _c.mutation.RequestBody(); !ok {
 		return &ValidationError{Name: "request_body", err: errors.New(`ent: missing required field "RequestExecution.request_body"`)}
 	}
@@ -468,9 +487,17 @@ func (_c *RequestExecutionCreate) createSpec() (*RequestExecution, *sqlgraph.Cre
 		_spec.SetField(requestexecution.FieldReasoningEffort, field.TypeString, value)
 		_node.ReasoningEffort = &value
 	}
+	if value, ok := _c.mutation.ChannelAPIKeySuffix(); ok {
+		_spec.SetField(requestexecution.FieldChannelAPIKeySuffix, field.TypeString, value)
+		_node.ChannelAPIKeySuffix = &value
+	}
 	if value, ok := _c.mutation.RequestBody(); ok {
 		_spec.SetField(requestexecution.FieldRequestBody, field.TypeJSON, value)
 		_node.RequestBody = value
+	}
+	if value, ok := _c.mutation.ResponseHeaders(); ok {
+		_spec.SetField(requestexecution.FieldResponseHeaders, field.TypeJSON, value)
+		_node.ResponseHeaders = value
 	}
 	if value, ok := _c.mutation.ResponseBody(); ok {
 		_spec.SetField(requestexecution.FieldResponseBody, field.TypeJSON, value)
@@ -511,10 +538,6 @@ func (_c *RequestExecutionCreate) createSpec() (*RequestExecution, *sqlgraph.Cre
 	if value, ok := _c.mutation.RequestHeaders(); ok {
 		_spec.SetField(requestexecution.FieldRequestHeaders, field.TypeJSON, value)
 		_node.RequestHeaders = value
-	}
-	if value, ok := _c.mutation.ResponseHeaders(); ok {
-		_spec.SetField(requestexecution.FieldResponseHeaders, field.TypeJSON, value)
-		_node.ResponseHeaders = value
 	}
 	if value, ok := _c.mutation.RequestURL(); ok {
 		_spec.SetField(requestexecution.FieldRequestURL, field.TypeString, value)
@@ -654,6 +677,24 @@ func (u *RequestExecutionUpsert) UpdateExternalID() *RequestExecutionUpsert {
 // ClearExternalID clears the value of the "external_id" field.
 func (u *RequestExecutionUpsert) ClearExternalID() *RequestExecutionUpsert {
 	u.SetNull(requestexecution.FieldExternalID)
+	return u
+}
+
+// SetResponseHeaders sets the "response_headers" field.
+func (u *RequestExecutionUpsert) SetResponseHeaders(v objects.JSONRawMessage) *RequestExecutionUpsert {
+	u.Set(requestexecution.FieldResponseHeaders, v)
+	return u
+}
+
+// UpdateResponseHeaders sets the "response_headers" field to the value that was provided on create.
+func (u *RequestExecutionUpsert) UpdateResponseHeaders() *RequestExecutionUpsert {
+	u.SetExcluded(requestexecution.FieldResponseHeaders)
+	return u
+}
+
+// ClearResponseHeaders clears the value of the "response_headers" field.
+func (u *RequestExecutionUpsert) ClearResponseHeaders() *RequestExecutionUpsert {
+	u.SetNull(requestexecution.FieldResponseHeaders)
 	return u
 }
 
@@ -837,24 +878,6 @@ func (u *RequestExecutionUpsert) ClearRequestHeaders() *RequestExecutionUpsert {
 	return u
 }
 
-// SetResponseHeaders sets the "response_headers" field.
-func (u *RequestExecutionUpsert) SetResponseHeaders(v objects.JSONRawMessage) *RequestExecutionUpsert {
-	u.Set(requestexecution.FieldResponseHeaders, v)
-	return u
-}
-
-// UpdateResponseHeaders sets the "response_headers" field to the value that was provided on create.
-func (u *RequestExecutionUpsert) UpdateResponseHeaders() *RequestExecutionUpsert {
-	u.SetExcluded(requestexecution.FieldResponseHeaders)
-	return u
-}
-
-// ClearResponseHeaders clears the value of the "response_headers" field.
-func (u *RequestExecutionUpsert) ClearResponseHeaders() *RequestExecutionUpsert {
-	u.SetNull(requestexecution.FieldResponseHeaders)
-	return u
-}
-
 // SetRequestURL sets the "request_url" field.
 func (u *RequestExecutionUpsert) SetRequestURL(v string) *RequestExecutionUpsert {
 	u.Set(requestexecution.FieldRequestURL, v)
@@ -919,6 +942,9 @@ func (u *RequestExecutionUpsertOne) UpdateNewValues() *RequestExecutionUpsertOne
 		}
 		if _, exists := u.create.mutation.ReasoningEffort(); exists {
 			s.SetIgnore(requestexecution.FieldReasoningEffort)
+		}
+		if _, exists := u.create.mutation.ChannelAPIKeySuffix(); exists {
+			s.SetIgnore(requestexecution.FieldChannelAPIKeySuffix)
 		}
 		if _, exists := u.create.mutation.RequestBody(); exists {
 			s.SetIgnore(requestexecution.FieldRequestBody)
@@ -989,6 +1015,27 @@ func (u *RequestExecutionUpsertOne) UpdateExternalID() *RequestExecutionUpsertOn
 func (u *RequestExecutionUpsertOne) ClearExternalID() *RequestExecutionUpsertOne {
 	return u.Update(func(s *RequestExecutionUpsert) {
 		s.ClearExternalID()
+	})
+}
+
+// SetResponseHeaders sets the "response_headers" field.
+func (u *RequestExecutionUpsertOne) SetResponseHeaders(v objects.JSONRawMessage) *RequestExecutionUpsertOne {
+	return u.Update(func(s *RequestExecutionUpsert) {
+		s.SetResponseHeaders(v)
+	})
+}
+
+// UpdateResponseHeaders sets the "response_headers" field to the value that was provided on create.
+func (u *RequestExecutionUpsertOne) UpdateResponseHeaders() *RequestExecutionUpsertOne {
+	return u.Update(func(s *RequestExecutionUpsert) {
+		s.UpdateResponseHeaders()
+	})
+}
+
+// ClearResponseHeaders clears the value of the "response_headers" field.
+func (u *RequestExecutionUpsertOne) ClearResponseHeaders() *RequestExecutionUpsertOne {
+	return u.Update(func(s *RequestExecutionUpsert) {
+		s.ClearResponseHeaders()
 	})
 }
 
@@ -1199,27 +1246,6 @@ func (u *RequestExecutionUpsertOne) UpdateRequestHeaders() *RequestExecutionUpse
 func (u *RequestExecutionUpsertOne) ClearRequestHeaders() *RequestExecutionUpsertOne {
 	return u.Update(func(s *RequestExecutionUpsert) {
 		s.ClearRequestHeaders()
-	})
-}
-
-// SetResponseHeaders sets the "response_headers" field.
-func (u *RequestExecutionUpsertOne) SetResponseHeaders(v objects.JSONRawMessage) *RequestExecutionUpsertOne {
-	return u.Update(func(s *RequestExecutionUpsert) {
-		s.SetResponseHeaders(v)
-	})
-}
-
-// UpdateResponseHeaders sets the "response_headers" field to the value that was provided on create.
-func (u *RequestExecutionUpsertOne) UpdateResponseHeaders() *RequestExecutionUpsertOne {
-	return u.Update(func(s *RequestExecutionUpsert) {
-		s.UpdateResponseHeaders()
-	})
-}
-
-// ClearResponseHeaders clears the value of the "response_headers" field.
-func (u *RequestExecutionUpsertOne) ClearResponseHeaders() *RequestExecutionUpsertOne {
-	return u.Update(func(s *RequestExecutionUpsert) {
-		s.ClearResponseHeaders()
 	})
 }
 
@@ -1458,6 +1484,9 @@ func (u *RequestExecutionUpsertBulk) UpdateNewValues() *RequestExecutionUpsertBu
 			if _, exists := b.mutation.ReasoningEffort(); exists {
 				s.SetIgnore(requestexecution.FieldReasoningEffort)
 			}
+			if _, exists := b.mutation.ChannelAPIKeySuffix(); exists {
+				s.SetIgnore(requestexecution.FieldChannelAPIKeySuffix)
+			}
 			if _, exists := b.mutation.RequestBody(); exists {
 				s.SetIgnore(requestexecution.FieldRequestBody)
 			}
@@ -1528,6 +1557,27 @@ func (u *RequestExecutionUpsertBulk) UpdateExternalID() *RequestExecutionUpsertB
 func (u *RequestExecutionUpsertBulk) ClearExternalID() *RequestExecutionUpsertBulk {
 	return u.Update(func(s *RequestExecutionUpsert) {
 		s.ClearExternalID()
+	})
+}
+
+// SetResponseHeaders sets the "response_headers" field.
+func (u *RequestExecutionUpsertBulk) SetResponseHeaders(v objects.JSONRawMessage) *RequestExecutionUpsertBulk {
+	return u.Update(func(s *RequestExecutionUpsert) {
+		s.SetResponseHeaders(v)
+	})
+}
+
+// UpdateResponseHeaders sets the "response_headers" field to the value that was provided on create.
+func (u *RequestExecutionUpsertBulk) UpdateResponseHeaders() *RequestExecutionUpsertBulk {
+	return u.Update(func(s *RequestExecutionUpsert) {
+		s.UpdateResponseHeaders()
+	})
+}
+
+// ClearResponseHeaders clears the value of the "response_headers" field.
+func (u *RequestExecutionUpsertBulk) ClearResponseHeaders() *RequestExecutionUpsertBulk {
+	return u.Update(func(s *RequestExecutionUpsert) {
+		s.ClearResponseHeaders()
 	})
 }
 
@@ -1738,27 +1788,6 @@ func (u *RequestExecutionUpsertBulk) UpdateRequestHeaders() *RequestExecutionUps
 func (u *RequestExecutionUpsertBulk) ClearRequestHeaders() *RequestExecutionUpsertBulk {
 	return u.Update(func(s *RequestExecutionUpsert) {
 		s.ClearRequestHeaders()
-	})
-}
-
-// SetResponseHeaders sets the "response_headers" field.
-func (u *RequestExecutionUpsertBulk) SetResponseHeaders(v objects.JSONRawMessage) *RequestExecutionUpsertBulk {
-	return u.Update(func(s *RequestExecutionUpsert) {
-		s.SetResponseHeaders(v)
-	})
-}
-
-// UpdateResponseHeaders sets the "response_headers" field to the value that was provided on create.
-func (u *RequestExecutionUpsertBulk) UpdateResponseHeaders() *RequestExecutionUpsertBulk {
-	return u.Update(func(s *RequestExecutionUpsert) {
-		s.UpdateResponseHeaders()
-	})
-}
-
-// ClearResponseHeaders clears the value of the "response_headers" field.
-func (u *RequestExecutionUpsertBulk) ClearResponseHeaders() *RequestExecutionUpsertBulk {
-	return u.Update(func(s *RequestExecutionUpsert) {
-		s.ClearResponseHeaders()
 	})
 }
 

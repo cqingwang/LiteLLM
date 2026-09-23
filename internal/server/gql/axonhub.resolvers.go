@@ -49,7 +49,7 @@ func (r *channelResolver) DefaultEndpoints(ctx context.Context, obj *ent.Channel
 func (r *channelResolver) AllModelEntries(ctx context.Context, obj *ent.Channel) ([]*biz.ChannelModelEntry, error) {
 	ch := biz.Channel{Channel: obj}
 	entries := ch.GetModelEntries()
-	result := lo.Values(entries)
+	result := sortChannelModelEntries(lo.Values(entries))
 
 	return lo.ToSlicePtr(result), nil
 }
@@ -159,6 +159,17 @@ func (r *channelSettingsResolver) BodyOverrideOperations(ctx context.Context, ob
 	return lo.ToSlicePtr(ops), nil
 }
 
+// ProviderQuota is the resolver for the providerQuota field. Quota-only
+// credentials (e.g. the Command Code account session cookie) are sensitive, so
+// they are only exposed to operators holding channel write permission.
+func (r *channelSettingsResolver) ProviderQuota(ctx context.Context, obj *objects.ChannelSettings) (*objects.ChannelProviderQuotaSettings, error) {
+	if obj == nil || !scopes.UserHasScope(ctx, scopes.ScopeWriteChannels) {
+		return nil, nil
+	}
+
+	return obj.ProviderQuota, nil
+}
+
 // CreateChannel is the resolver for the createChannel field.
 func (r *mutationResolver) CreateChannel(ctx context.Context, input ent.CreateChannelInput) (*ent.Channel, error) {
 	return r.channelService.CreateChannel(ctx, input)
@@ -182,6 +193,11 @@ func (r *mutationResolver) UpdateChannel(ctx context.Context, id objects.GUID, i
 // SaveChannelEndpoints is the resolver for the saveChannelEndpoints field.
 func (r *mutationResolver) SaveChannelEndpoints(ctx context.Context, input biz.SaveChannelEndpointsInput) (*ent.Channel, error) {
 	return r.channelService.SaveChannelEndpoints(ctx, input)
+}
+
+// DetectChannelEndpoints is the resolver for the detectChannelEndpoints field.
+func (r *mutationResolver) DetectChannelEndpoints(ctx context.Context, input biz.DetectChannelEndpointsInput) (*biz.DetectChannelEndpointsPayload, error) {
+	return r.channelService.DetectChannelEndpoints(ctx, input)
 }
 
 // UpdateChannelStatus is the resolver for the updateChannelStatus field.
@@ -247,6 +263,39 @@ func (r *mutationResolver) BulkDeleteChannels(ctx context.Context, ids []*object
 	channelIDs := objects.IntGuids(ids)
 
 	if err := r.channelService.BulkDeleteChannels(ctx, channelIDs); err != nil {
+		return false, err
+	}
+
+	return true, nil
+}
+
+// BulkAddChannelTags is the resolver for the bulkAddChannelTags field.
+func (r *mutationResolver) BulkAddChannelTags(ctx context.Context, ids []*objects.GUID, tags []string) (bool, error) {
+	channelIDs := objects.IntGuids(ids)
+
+	if err := r.channelService.BulkAddChannelTags(ctx, channelIDs, tags); err != nil {
+		return false, err
+	}
+
+	return true, nil
+}
+
+// BulkRemoveChannelTags is the resolver for the bulkRemoveChannelTags field.
+func (r *mutationResolver) BulkRemoveChannelTags(ctx context.Context, ids []*objects.GUID, tags []string) (bool, error) {
+	channelIDs := objects.IntGuids(ids)
+
+	if err := r.channelService.BulkRemoveChannelTags(ctx, channelIDs, tags); err != nil {
+		return false, err
+	}
+
+	return true, nil
+}
+
+// BulkManageChannelTags is the resolver for the bulkManageChannelTags field.
+func (r *mutationResolver) BulkManageChannelTags(ctx context.Context, ids []*objects.GUID, addTags []string, removeTags []string) (bool, error) {
+	channelIDs := objects.IntGuids(ids)
+
+	if err := r.channelService.BulkManageChannelTags(ctx, channelIDs, addTags, removeTags); err != nil {
 		return false, err
 	}
 
@@ -346,6 +395,20 @@ func (r *mutationResolver) BulkUpdateChannelOrdering(ctx context.Context, input 
 	}
 
 	return &BulkUpdateChannelOrderingResult{
+		Success:  true,
+		Updated:  len(updatedChannels),
+		Channels: updatedChannels,
+	}, nil
+}
+
+// BulkUpdateChannelAutoDisable is the resolver for the bulkUpdateChannelAutoDisable field.
+func (r *mutationResolver) BulkUpdateChannelAutoDisable(ctx context.Context, input biz.BulkUpdateChannelAutoDisableInput) (*BulkUpdateChannelAutoDisablePayload, error) {
+	updatedChannels, err := r.channelService.BulkUpdateChannelAutoDisable(ctx, input)
+	if err != nil {
+		return nil, err
+	}
+
+	return &BulkUpdateChannelAutoDisablePayload{
 		Success:  true,
 		Updated:  len(updatedChannels),
 		Channels: updatedChannels,
@@ -651,9 +714,17 @@ func (r *mutationResolver) SyncChannelModels(ctx context.Context, channelID obje
 		return nil, err
 	}
 
+	// manual_models is nullable in the schema; normalize nil so the non-null
+	// payload field never resolves to null.
+	manualModels := ch.ManualModels
+	if manualModels == nil {
+		manualModels = []string{}
+	}
+
 	return &SyncChannelModelsPayload{
 		ChannelID:       channelID,
 		SupportedModels: ch.SupportedModels,
+		ManualModels:    manualModels,
 	}, nil
 }
 

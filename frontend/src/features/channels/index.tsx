@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback, useEffect, lazy, Suspense } from 'react';
+import { useState, useMemo, useCallback, useEffect, useRef, lazy, Suspense } from 'react';
 import { SortingState } from '@tanstack/react-table';
 import { useTranslation } from 'react-i18next';
 import { useDebounce } from '@/hooks/use-debounce';
@@ -12,15 +12,42 @@ import { ChannelsPrimaryButtons } from './components/channels-primary-buttons';
 import { ChannelsTable } from './components/channels-table';
 import { ChannelsTypeTabs } from './components/channels-type-tabs';
 import ChannelsProvider, { useChannels } from './context/channels-context';
-import { useQueryChannels, useChannelTypes, useErrorChannelsCount, useChannelProbeData } from './data/channels';
+import {
+  DEFAULT_CHANNEL_COLUMN_VISIBILITY,
+  parseChannelColumnVisibility,
+  useQueryChannels,
+  useChannelTypes,
+  useErrorChannelsCount,
+  useChannelProbeData,
+  type ChannelListColumnVisibility,
+} from './data/channels';
 import { useProvidersData } from '@/features/models/data/providers';
+import { useQuotaRoutingSettings } from '@/features/system/data/system';
+import { useQueryClient } from '@tanstack/react-query';
+import { useAuthStore } from '@/stores/authStore';
 
 const ChannelsDialogs = lazy(() => import('./components/channels-dialogs').then((m) => ({ default: m.ChannelsDialogs })));
 
 function ChannelsContent() {
   const { t } = useTranslation();
   useProvidersData();
-  const { channelPermissions } = usePermissions();
+  const { channelPermissions, hasSystemScope } = usePermissions();
+  const { data: quotaRoutingSettings } = useQuotaRoutingSettings();
+  const queryClient = useQueryClient();
+  const authUserId = useAuthStore((state) => state.auth.user?.id);
+  const canReadSystemSettings = hasSystemScope('read_settings');
+  const quotaRoutingCacheKey = `${authUserId ?? 'signed-out'}:${canReadSystemSettings}`;
+  const previousQuotaRoutingCacheKey = useRef<string | undefined>(undefined);
+  const currentQuotaRoutingSettings = previousQuotaRoutingCacheKey.current === quotaRoutingCacheKey ? quotaRoutingSettings : undefined;
+  useEffect(() => {
+    if (previousQuotaRoutingCacheKey.current == null) {
+      previousQuotaRoutingCacheKey.current = quotaRoutingCacheKey;
+      return;
+    }
+    if (previousQuotaRoutingCacheKey.current === quotaRoutingCacheKey) return;
+    previousQuotaRoutingCacheKey.current = quotaRoutingCacheKey;
+    void queryClient.removeQueries({ queryKey: ['quotaRoutingSettings'] });
+  }, [queryClient, quotaRoutingCacheKey]);
   const { showTypeTabs } = useChannels();
   const { pageSize, setCursors, setPageSize, resetCursor, paginationArgs } = usePaginationSearch({
     defaultPageSize: 20,
@@ -44,17 +71,14 @@ function ChannelsContent() {
     }
     return [{ id: 'createdAt', desc: true }];
   });
-  const [isHealthColumnVisible, setIsHealthColumnVisible] = useState<boolean>(() => {
+  const [columnVisibility, setColumnVisibility] = useState<ChannelListColumnVisibility>(() => {
     const stored = localStorage.getItem('channels-table-column-visibility');
-    if (stored) {
-      try {
-        const visibility = JSON.parse(stored);
-        return visibility.health !== false;
-      } catch {
-        return true;
-      }
+    if (!stored) return DEFAULT_CHANNEL_COLUMN_VISIBILITY;
+    try {
+      return parseChannelColumnVisibility(JSON.parse(stored));
+    } catch {
+      return DEFAULT_CHANNEL_COLUMN_VISIBILITY;
     }
-    return true;
   });
 
   useEffect(() => {
@@ -147,13 +171,14 @@ function ChannelsContent() {
     orderBy: currentOrderBy,
     hasTag: tagFilter || undefined,
     model: modelFilter || undefined,
+    columnVisibility,
   });
 
   const channelIDs = useMemo(() => {
     return data?.edges?.map((edge) => edge.node.id) || [];
   }, [data?.edges]);
 
-  const { data: probeData } = useChannelProbeData(channelIDs, { enabled: isHealthColumnVisible });
+  const { data: probeData } = useChannelProbeData(channelIDs, { enabled: columnVisibility.health !== false });
 
   const channelsWithProbeData = useMemo(() => {
     if (!data?.edges) return [];
@@ -252,10 +277,13 @@ function ChannelsContent() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const columns = useMemo(() => createColumns(t, channelPermissions.canWrite), [t, channelPermissions.canWrite]);
+  const columns = useMemo(
+     () => createColumns(t, channelPermissions.canWrite, currentQuotaRoutingSettings?.defaultMode),
+     [t, channelPermissions.canWrite, currentQuotaRoutingSettings?.defaultMode]
+  );
 
   return (
-    <div className='flex flex-1 flex-col overflow-hidden'>
+    <div className='flex min-w-0 flex-1 flex-col overflow-hidden'>
       <ChannelsErrorBanner
         errorCount={errorCount}
         onFilterErrorChannels={handleFilterErrorChannels}
@@ -289,7 +317,8 @@ function ChannelsContent() {
         onStatusFilterChange={handleStatusFilterChange}
         onTagFilterChange={handleTagFilterChange}
         onModelFilterChange={handleModelFilterChange}
-        onHealthColumnVisibilityChange={setIsHealthColumnVisible}
+        columnVisibility={columnVisibility}
+        onColumnVisibilityChange={setColumnVisibility}
         canWrite={channelPermissions.canWrite}
       />
     </div>

@@ -183,15 +183,15 @@ func TestNanoGPT_CheckQuota_APIError(t *testing.T) {
 }
 
 func TestNanoGPT_CheckQuota_NextResetAt(t *testing.T) {
-	expectedResetAt := time.UnixMilli(1717200000000)
+	expectedResetAt := time.UnixMilli(4087929600000)
 
 	httpClient := httpclient.NewHttpClientWithClient(&http.Client{
 		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 			body := `{
 				"active": true,
 				"state": "active",
-				"dailyInputTokens": {"used": 1000, "remaining": 199000, "percentUsed": 0.5, "resetAt": 1717200000000},
-				"weeklyInputTokens": {"used": 5000, "remaining": 995000, "percentUsed": 0.05, "resetAt": 1717804800000}
+				"dailyInputTokens": {"used": 1000, "remaining": 199000, "percentUsed": 0.5, "resetAt": 4087929600000},
+				"weeklyInputTokens": {"used": 5000, "remaining": 995000, "percentUsed": 0.05, "resetAt": 4088534400000}
 			}`
 
 			return &http.Response{
@@ -221,7 +221,7 @@ func TestNanoGPT_CheckQuota_NullWindow(t *testing.T) {
 			body := `{
 				"active": true,
 				"state": "active",
-				"weeklyInputTokens": {"used": 5000, "remaining": 995000, "percentUsed": 0.05, "resetAt": 1717804800000}
+				"weeklyInputTokens": {"used": 5000, "remaining": 995000, "percentUsed": 0.05, "resetAt": 4088534400000}
 			}`
 
 			return &http.Response{
@@ -255,17 +255,17 @@ func TestNanoGPT_CheckQuota_NullWindow(t *testing.T) {
 	require.True(t, hasWeekly)
 
 	require.NotNil(t, quota.NextResetAt)
-	expectedResetAt := time.UnixMilli(1717804800000)
+	expectedResetAt := time.UnixMilli(4088534400000)
 	require.Equal(t, expectedResetAt, *quota.NextResetAt)
 }
 
 func TestNanoGPT_CheckQuota_GraceUntilAsNextResetAt(t *testing.T) {
-	graceUntil := "2025-04-30T00:00:00Z"
+	graceUntil := "2099-04-30T00:00:00Z"
 	expectedTime, _ := time.Parse(time.RFC3339, graceUntil)
 
 	httpClient := httpclient.NewHttpClientWithClient(&http.Client{
 		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-			body := `{"active": true, "state": "grace", "graceUntil": "2025-04-30T00:00:00Z"}`
+			body := `{"active": true, "state": "grace", "graceUntil": "2099-04-30T00:00:00Z"}`
 			return &http.Response{
 				StatusCode: http.StatusOK,
 				Header:     make(http.Header),
@@ -480,7 +480,8 @@ func TestNanoGPT_CheckQuota_PerLimitStatuses_Exhausted(t *testing.T) {
 		Credentials: objects.ChannelCredentials{APIKey: "test-api-key"},
 	})
 	require.NoError(t, err)
-	require.Equal(t, "warning", quota.Status, "overall should be warning because some limits are exhausted but state is active")
+	require.Equal(t, "exhausted", quota.Status, "overall should be exhausted because some limits are exhausted")
+	require.False(t, quota.Ready)
 	require.Len(t, quota.Limits, 3)
 
 	imgLimit := quota.Limits[0]
@@ -525,4 +526,37 @@ func TestNanoGPT_CheckQuota_PerLimitStatuses_PercentUsedExhausted_NoRemaining(t 
 	require.Equal(t, "exhausted", dailyTokenLimit.Status, "percentUsed>=1.0 with nil Remaining should be exhausted")
 	require.InDelta(t, 1.0, dailyTokenLimit.UsageRatio, 0.001)
 	require.False(t, dailyTokenLimit.Ready)
+}
+
+func TestNanoGPT_CheckQuota_WeeklyExhausted(t *testing.T) {
+	httpClient := httpclient.NewHttpClientWithClient(&http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			body := `{
+				"active": true,
+				"state": "active",
+				"weeklyInputTokens": {"used": 1000000, "remaining": 0, "percentUsed": 1.0, "resetAt": 1717804800000}
+			}`
+
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     make(http.Header),
+				Body:       io.NopCloser(strings.NewReader(body)),
+			}, nil
+		}),
+	})
+
+	checker := NewNanoGPTQuotaChecker(httpClient)
+
+	quota, err := checker.CheckQuota(context.Background(), &ent.Channel{
+		Credentials: objects.ChannelCredentials{APIKey: "test-api-key"},
+	})
+	require.NoError(t, err)
+	require.Equal(t, "exhausted", quota.Status)
+	require.False(t, quota.Ready)
+	require.Len(t, quota.Limits, 1)
+
+	weeklyLimit := quota.Limits[0]
+	require.Equal(t, QuotaLimitTypeToken, weeklyLimit.Type)
+	require.Equal(t, "exhausted", weeklyLimit.Status)
+	require.InDelta(t, 1.0, weeklyLimit.UsageRatio, 0.001)
 }

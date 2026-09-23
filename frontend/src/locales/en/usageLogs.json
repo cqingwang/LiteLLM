@@ -1,7 +1,9 @@
 {
   "usageLogs.columns.totalTokens": "Total Tokens",
   "usageLogs.columns.inputLabel": "Input:",
+  "usageLogs.columns.inputShort": "Input",
   "usageLogs.columns.outputLabel": "Output:",
+  "usageLogs.columns.outputShort": "Output",
   "usageLogs.columns.promptCachedTokens": "Input Cached Tokens",
   "usageLogs.columns.writeCacheTokens": "Write Cache Tokens",
   "usageLogs.columns.totalCost": "Total Cost",

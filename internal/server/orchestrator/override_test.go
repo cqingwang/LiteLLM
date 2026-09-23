@@ -2035,6 +2035,105 @@ func TestOverrideBodySetIfAbsent(t *testing.T) {
 	}
 }
 
+// TestOverrideBodySetIfAbsentOriginalRequest covers https://github.com/looplj/axonhub/issues/2133:
+// the outbound body is produced by format transformation, so a field the client sent may not
+// survive it (e.g. Anthropic `thinking` mapped to `reasoning_effort`). set_if_absent must treat
+// a field present in the original inbound request body as present.
+func TestOverrideBodySetIfAbsentOriginalRequest(t *testing.T) {
+	ctx := context.Background()
+
+	tests := []struct {
+		name         string
+		originalBody string
+		body         string
+		op           objects.OverrideOperation
+		expected     string
+	}{
+		{
+			name:         "preserves field sent by client but dropped by transformation",
+			originalBody: `{"model":"deepseek-v4-flash","thinking":{"type":"enabled","budget_tokens":13312}}`,
+			body:         `{"model":"deepseek-v4-flash","reasoning_effort":"high"}`,
+			op:           objects.OverrideOperation{Op: objects.OverrideOpSetIfAbsent, Path: "thinking", Value: `{"type":"disabled"}`},
+			expected:     `{"model":"deepseek-v4-flash","reasoning_effort":"high"}`,
+		},
+		{
+			name:         "preserves explicit null sent by client",
+			originalBody: `{"thinking":null}`,
+			body:         `{}`,
+			op:           objects.OverrideOperation{Op: objects.OverrideOpSetIfAbsent, Path: "thinking", Value: `{"type":"disabled"}`},
+			expected:     `{}`,
+		},
+		{
+			name:         "preserves nested field sent by client",
+			originalBody: `{"generation":{"max_output_tokens":16000}}`,
+			body:         `{}`,
+			op:           objects.OverrideOperation{Op: objects.OverrideOpSetIfAbsent, Path: "generation.max_output_tokens", Value: "32000"},
+			expected:     `{}`,
+		},
+		{
+			name:         "sets default when absent from both bodies",
+			originalBody: `{"model":"deepseek-v4-flash"}`,
+			body:         `{"model":"deepseek-v4-flash","reasoning_effort":"high"}`,
+			op:           objects.OverrideOperation{Op: objects.OverrideOpSetIfAbsent, Path: "thinking", Value: `{"type":"disabled"}`},
+			expected:     `{"model":"deepseek-v4-flash","reasoning_effort":"high","thinking":{"type":"disabled"}}`,
+		},
+		{
+			name:         "preserves field present only in transformed body",
+			originalBody: `{}`,
+			body:         `{"max_output_tokens":8000}`,
+			op:           objects.OverrideOperation{Op: objects.OverrideOpSetIfAbsent, Path: "max_output_tokens", Value: "32000"},
+			expected:     `{"max_output_tokens":8000}`,
+		},
+		{
+			name:         "ignores non-JSON original body",
+			originalBody: `not-json`,
+			body:         `{}`,
+			op:           objects.OverrideOperation{Op: objects.OverrideOpSetIfAbsent, Path: "thinking", Value: `{"type":"disabled"}`},
+			expected:     `{"thinking":{"type":"disabled"}}`,
+		},
+		{
+			name:         "sets default when no original request is recorded",
+			originalBody: "",
+			body:         `{}`,
+			op:           objects.OverrideOperation{Op: objects.OverrideOpSetIfAbsent, Path: "thinking", Value: `{"type":"disabled"}`},
+			expected:     `{"thinking":{"type":"disabled"}}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			llmRequest := &llm.Request{Model: "deepseek-v4-flash"}
+			if tt.originalBody != "" {
+				llmRequest.RawRequest = &httpclient.Request{Body: []byte(tt.originalBody)}
+			}
+
+			channel := &biz.Channel{
+				Channel: &ent.Channel{
+					ID:   1,
+					Name: "set-if-absent-original-test",
+					Settings: &objects.ChannelSettings{
+						BodyOverrideOperations: []objects.OverrideOperation{tt.op},
+					},
+				},
+				Outbound: &mockTransformer{},
+			}
+			outbound := &PersistentOutboundTransformer{
+				wrapped: &mockTransformer{},
+				state: &PersistenceState{
+					CurrentCandidate: &ChannelModelsCandidate{Channel: channel},
+					LlmRequest:       llmRequest,
+					OriginalModel:    llmRequest.Model,
+				},
+			}
+
+			middleware := applyOverrideRequestBody(outbound)
+			result, err := middleware.OnOutboundRawRequest(ctx, &httpclient.Request{Body: []byte(tt.body)})
+			require.NoError(t, err)
+			require.JSONEq(t, tt.expected, string(result.Body))
+		})
+	}
+}
+
 func TestParseOverrideOperations(t *testing.T) {
 	t.Run("empty input", func(t *testing.T) {
 		ops, err := objects.ParseOverrideOperations("")
@@ -2388,5 +2487,95 @@ func TestOverrideOperationsArrayOps(t *testing.T) {
 
 		require.Equal(t, int64(1), gjson.Get(got, "tools.#").Int())
 		require.Equal(t, "calculate", gjson.Get(got, "tools.0.function.name").String())
+	})
+}
+
+// TestOverrideBodySkipsNonJSONBody guards the image edit regression: sjson rebuilds a
+// non-JSON document from scratch, so applying body overrides to a multipart payload used
+// to replace the whole form with a tiny JSON object while Content-Type still advertised
+// the multipart boundary, producing a truncated upstream request.
+func TestOverrideBodySkipsNonJSONBody(t *testing.T) {
+	ctx := context.Background()
+
+	multipartBody := []byte("--boundary123\r\n" +
+		"Content-Disposition: form-data; name=\"image\"; filename=\"image_1.png\"\r\n" +
+		"Content-Type: image/png\r\n\r\n" +
+		"\x89PNG\r\n\x1a\nbinary-image-bytes\r\n" +
+		"--boundary123\r\n" +
+		"Content-Disposition: form-data; name=\"prompt\"\r\n\r\n" +
+		"make it blue\r\n" +
+		"--boundary123--\r\n")
+
+	newOutbound := func() *PersistentOutboundTransformer {
+		channel := &biz.Channel{
+			Channel: &ent.Channel{
+				ID:              1,
+				Name:            "test-channel",
+				SupportedModels: []string{"gpt-image-1"},
+				Settings: &objects.ChannelSettings{
+					BodyOverrideOperations: []objects.OverrideOperation{
+						{Op: objects.OverrideOpSet, Path: "response_format", Value: "b64_json"},
+					},
+				},
+			},
+			Outbound: &mockTransformer{},
+		}
+
+		return &PersistentOutboundTransformer{
+			wrapped: &mockTransformer{},
+			state: &PersistenceState{
+				CurrentCandidate:      &ChannelModelsCandidate{Channel: channel},
+				CurrentCandidateIndex: 0,
+				CurrentModelIndex:     0,
+				LlmRequest:            &llm.Request{Model: "gpt-image-1"},
+			},
+		}
+	}
+
+	t.Run("multipart body is left untouched", func(t *testing.T) {
+		headers := make(http.Header)
+		headers.Set("Content-Type", "multipart/form-data; boundary=boundary123")
+
+		request := &httpclient.Request{
+			Method:      "POST",
+			URL:         "https://api.example.com/v1/images/edits",
+			Headers:     headers,
+			ContentType: "multipart/form-data; boundary=boundary123",
+			Body:        multipartBody,
+		}
+
+		modified, err := applyOverrideRequestBody(newOutbound()).OnOutboundRawRequest(ctx, request)
+		require.NoError(t, err)
+		require.Equal(t, multipartBody, modified.Body)
+	})
+
+	t.Run("multipart body without explicit content type is left untouched", func(t *testing.T) {
+		request := &httpclient.Request{
+			Method: "POST",
+			URL:    "https://api.example.com/v1/images/edits",
+			Body:   multipartBody,
+		}
+
+		modified, err := applyOverrideRequestBody(newOutbound()).OnOutboundRawRequest(ctx, request)
+		require.NoError(t, err)
+		require.Equal(t, multipartBody, modified.Body)
+	})
+
+	t.Run("json body still gets overridden", func(t *testing.T) {
+		headers := make(http.Header)
+		headers.Set("Content-Type", "application/json")
+
+		request := &httpclient.Request{
+			Method:      "POST",
+			URL:         "https://api.example.com/v1/images/generations",
+			Headers:     headers,
+			ContentType: "application/json",
+			Body:        []byte(`{"model":"gpt-image-1","prompt":"a cat"}`),
+		}
+
+		modified, err := applyOverrideRequestBody(newOutbound()).OnOutboundRawRequest(ctx, request)
+		require.NoError(t, err)
+		require.Equal(t, "b64_json", gjson.GetBytes(modified.Body, "response_format").String())
+		require.Equal(t, "a cat", gjson.GetBytes(modified.Body, "prompt").String())
 	})
 }

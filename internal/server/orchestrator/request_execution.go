@@ -4,11 +4,13 @@ import (
 	"context"
 	"net/http"
 	"regexp"
+	"sync/atomic"
 	"strings"
 	"time"
 
 	"github.com/tidwall/gjson"
 
+	"github.com/looplj/axonhub/internal/ent/requestexecution"
 	"github.com/looplj/axonhub/internal/log"
 	"github.com/looplj/axonhub/internal/pkg/xcontext"
 	"github.com/looplj/axonhub/internal/pkg/xerrors"
@@ -68,7 +70,23 @@ type persistRequestExecutionMiddleware struct {
 
 	outbound *PersistentOutboundTransformer
 
-	rawResponse *httpclient.Response
+	rawResponse    *httpclient.Response
+	headerObserver *executionHeaderObserver
+}
+
+type executionHeaderObserver struct {
+	service     *biz.RequestService
+	executionID int
+	observed    atomic.Bool
+}
+
+func (o *executionHeaderObserver) observe(ctx context.Context, headers http.Header) {
+	o.observed.Store(true)
+	persistCtx, cancel := xcontext.DetachWithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	if err := o.service.UpdateRequestExecutionResponseHeaders(persistCtx, o.executionID, headers); err != nil {
+		log.Warn(persistCtx, "Failed to save execution response headers", log.Cause(err))
+	}
 }
 
 func persistRequestExecution(outbound *PersistentOutboundTransformer) pipeline.Middleware {
@@ -83,7 +101,14 @@ func (m *persistRequestExecutionMiddleware) Name() string {
 
 func (m *persistRequestExecutionMiddleware) OnOutboundRawRequest(ctx context.Context, request *httpclient.Request) (*httpclient.Request, error) {
 	state := m.outbound.state
-	if state == nil || state.Request == nil || state.RequestExec != nil {
+	if state == nil {
+		return request, nil
+	}
+	if state.RequestExec != nil {
+		if m.headerObserver != nil {
+			m.headerObserver.observed.Store(false)
+			request.OnResponseHeaders = m.headerObserver.observe
+		}
 		return request, nil
 	}
 
@@ -130,14 +155,21 @@ func (m *persistRequestExecutionMiddleware) OnOutboundRawRequest(ctx context.Con
 	}
 
 	state.RequestExec = requestExec
+	m.rawResponse = nil
+	m.headerObserver = &executionHeaderObserver{service: state.RequestService, executionID: requestExec.ID}
+	request.OnResponseHeaders = m.headerObserver.observe
 
 	return request, nil
 }
 
 func (m *persistRequestExecutionMiddleware) OnOutboundRawResponse(ctx context.Context, response *httpclient.Response) (*httpclient.Response, error) {
 	m.rawResponse = response
-	if m.outbound.state != nil && response != nil {
+	if response != nil && m.outbound.state != nil {
+		// 记录渠道 HTTP 状态码，供执行日志展示；官方侧未捕获该字段，此处保留本地功能。
 		m.outbound.state.ResponseStatusCode = response.StatusCode
+		if m.headerObserver != nil && !m.headerObserver.observed.Load() {
+			m.headerObserver.observe(ctx, response.Headers)
+		}
 	}
 	return response, nil
 }
@@ -192,9 +224,11 @@ func (m *persistRequestExecutionMiddleware) OnOutboundLlmResponse(ctx context.Co
 	// before persisting into the JSON response_body column.
 	respBody := audioSafeResponseBody(llmResp.RequestType, m.rawResponse.Headers.Get("Content-Type"), m.rawResponse.Body)
 
-	err := state.RequestService.UpdateRequestExecutionCompleted(
+	err := state.RequestService.UpdateRequestExecutionFinalized(
 		persistCtx,
 		state.RequestExec.ID,
+		requestexecution.StatusCompleted,
+		"",
 		llmResp.ID,
 		respBody,
 		metrics,
@@ -252,11 +286,13 @@ func (m *persistRequestExecutionMiddleware) OnOutboundRawError(ctx context.Conte
 		}
 	}
 
+	failure := ClassifyUpstreamTransportError(err)
+
 	updateErr := state.RequestService.UpdateRequestExecutionFailed(
 		persistCtx,
 		state.RequestExec.ID,
-		ExtractErrorMessage(err),
-		ExtractErrorInfo(err),
+		ExtractErrorMessage(failure),
+		ExtractErrorInfo(failure),
 	)
 	if updateErr != nil {
 		log.Warn(persistCtx, "Failed to update request execution status to failed", log.Cause(updateErr))
@@ -267,6 +303,13 @@ func (m *persistRequestExecutionMiddleware) OnOutboundRawError(ctx context.Conte
 func ExtractErrorInfo(err error) *biz.ExecutionErrorInfo {
 	httpErr, ok := xerrors.As[*httpclient.Error](err)
 	if !ok {
+		// Classified errors (e.g. upstream transport failures) carry their own status code.
+		if respErr, ok := xerrors.As[*llm.ResponseError](err); ok && respErr.StatusCode != 0 {
+			statusCode := respErr.StatusCode
+
+			return &biz.ExecutionErrorInfo{StatusCode: &statusCode}
+		}
+
 		return nil
 	}
 
@@ -279,6 +322,12 @@ func ExtractErrorInfo(err error) *biz.ExecutionErrorInfo {
 func ExtractErrorMessage(err error) string {
 	httpErr, ok := xerrors.As[*httpclient.Error](err)
 	if !ok {
+		// Prefer the structured message over ResponseError.Error(), which also
+		// concatenates the status text, code and type.
+		if respErr, ok := xerrors.As[*llm.ResponseError](err); ok && respErr.Detail.Message != "" {
+			return respErr.Detail.Message
+		}
+
 		return err.Error()
 	}
 

@@ -33,6 +33,7 @@ type Handlers struct {
 	Invitation     *api.InvitationHandlers
 	Jina           *api.JinaHandlers
 	Codex          *api.CodexHandlers
+	XAI            *api.XAIHandlers
 	ClaudeCode     *api.ClaudeCodeHandlers
 	Antigravity    *api.AntigravityHandlers
 	Copilot        *api.CopilotHandlers
@@ -45,10 +46,11 @@ type Handlers struct {
 type Services struct {
 	fx.In
 
-	TraceService  *biz.TraceService
-	ThreadService *biz.ThreadService
-	AuthService   *biz.AuthService
-	SystemService *biz.SystemService
+	TraceService   *biz.TraceService
+	ThreadService  *biz.ThreadService
+	AuthService    *biz.AuthService
+	SystemService  *biz.SystemService
+	RequestService *biz.RequestService
 }
 
 func SetupRoutes(server *Server, handlers Handlers, client *ent.Client, services Services, ipAccessControl *middleware.IPAccessControlConfig) {
@@ -132,6 +134,9 @@ func SetupRoutes(server *Server, handlers Handlers, client *ent.Client, services
 		adminGroup.POST("/codex/oauth/start", handlers.Codex.StartOAuth)
 		adminGroup.POST("/codex/oauth/exchange", handlers.Codex.Exchange)
 		adminGroup.POST("/codex/auth/decode", handlers.Codex.DecodeAuthJSON)
+		adminGroup.POST("/xai/oauth/start", handlers.XAI.StartOAuth)
+		adminGroup.POST("/xai/oauth/exchange", handlers.XAI.Exchange)
+		adminGroup.POST("/xai/oauth/sso", handlers.XAI.DecodeSSO)
 
 		adminGroup.POST("/claudecode/oauth/start", handlers.ClaudeCode.StartOAuth)
 		adminGroup.POST("/claudecode/oauth/exchange", handlers.ClaudeCode.Exchange)
@@ -150,6 +155,7 @@ func SetupRoutes(server *Server, handlers Handlers, client *ent.Client, services
 			"/playground/chat",
 			middleware.WithTimeout(server.Config.LLMRequestTimeout),
 			middleware.WithSource(request.SourcePlayground),
+			middleware.WithResponseHeaders(services.RequestService),
 			handlers.Playground.ChatCompletion,
 		)
 
@@ -182,14 +188,23 @@ func SetupRoutes(server *Server, handlers Handlers, client *ent.Client, services
 		openAPIGroup.POST("/webhook/echo", handlers.System.WebhookEcho)
 	}
 
-	apiGroup := server.Group("/",
-		middleware.WithTimeout(server.Config.LLMRequestTimeout),
+	apiMiddlewares := []gin.HandlerFunc{
 		middleware.WithIPBlocklist(services.SystemService),
 		middleware.WithAPIKeyConfig(services.AuthService, nil),
 		middleware.WithSource(request.SourceAPI),
+		middleware.WithResponseHeaders(services.RequestService),
 		middleware.WithThread(server.Config.Trace, services.ThreadService),
 		middleware.WithTrace(server.Config.Trace, services.TraceService),
-	)
+	}
+	apiGroup := server.Group("/", append([]gin.HandlerFunc{
+		middleware.WithTimeout(server.Config.LLMRequestTimeout),
+	}, apiMiddlewares...)...)
+
+	// WebSocket mode owns a long-lived connection and applies its processing
+	// timeout per response.create event, so it must not inherit the ordinary
+	// single-request timeout from apiGroup.
+	responsesWebSocketGroup := server.Group("/", apiMiddlewares...)
+	responsesWebSocketGroup.GET("/v1/responses", handlers.OpenAI.CreateResponseWebSocket(server.Config.LLMRequestTimeout))
 
 	{
 		openaiGroup := apiGroup.Group("/v1")
@@ -201,6 +216,7 @@ func SetupRoutes(server *Server, handlers Handlers, client *ent.Client, services
 		openaiGroup.GET("/models/*model", handlers.OpenAI.RetrieveModel)
 		openaiGroup.POST("/embeddings", handlers.OpenAI.CreateEmbedding)
 		openaiGroup.POST("/moderations", handlers.OpenAI.CreateModeration)
+		openaiGroup.POST("/alpha/search", handlers.OpenAI.CreateAlphaSearch)
 		openaiGroup.POST("/images/generations", handlers.OpenAI.CreateImage)
 		openaiGroup.POST("/images/edits", handlers.OpenAI.CreateImageEdit)
 		openaiGroup.POST("/videos", handlers.OpenAI.CreateVideo)
@@ -249,6 +265,7 @@ func SetupRoutes(server *Server, handlers Handlers, client *ent.Client, services
 			middleware.WithIPBlocklist(services.SystemService),
 			middleware.WithGeminiKeyAuth(services.AuthService),
 			middleware.WithSource(request.SourceAPI),
+			middleware.WithResponseHeaders(services.RequestService),
 			middleware.WithThread(server.Config.Trace, services.ThreadService),
 			middleware.WithTrace(server.Config.Trace, services.TraceService),
 		)
@@ -261,6 +278,7 @@ func SetupRoutes(server *Server, handlers Handlers, client *ent.Client, services
 			middleware.WithIPBlocklist(services.SystemService),
 			middleware.WithGeminiKeyAuth(services.AuthService),
 			middleware.WithSource(request.SourceAPI),
+			middleware.WithResponseHeaders(services.RequestService),
 			middleware.WithThread(server.Config.Trace, services.ThreadService),
 			middleware.WithTrace(server.Config.Trace, services.TraceService),
 		)

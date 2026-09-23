@@ -1,28 +1,79 @@
 package biz
 
+import "github.com/looplj/axonhub/internal/objects"
+
 const (
 	defaultChannelTestSystemPrompt = "You are a helpful assistant."
 	defaultChannelTestUserPrompt   = "Hello world, I'm AxonHub.\nPlease tell me who you are?"
 	maxChannelTestPromptRunes      = 4096
 )
 
+func defaultCleanupOptions() []CleanupOption {
+	return []CleanupOption{
+		{
+			ResourceType: CleanupResourceRequests,
+			Enabled:      false,
+			CleanupDays:  3,
+		},
+		{
+			ResourceType: CleanupResourceUsageLogs,
+			Enabled:      false,
+			CleanupDays:  30,
+		},
+		{
+			ResourceType: CleanupResourceRequestBodies,
+			Enabled:      false,
+			CleanupDays:  7,
+		},
+		{
+			ResourceType: CleanupResourceResponseBodies,
+			Enabled:      false,
+			CleanupDays:  7,
+		},
+		{
+			ResourceType: CleanupResourceResponseChunks,
+			Enabled:      false,
+			CleanupDays:  3,
+		},
+	}
+}
+
+// mergeCleanupOptions keeps existing entries and appends any missing defaults.
+func mergeCleanupOptions(existing []CleanupOption) []CleanupOption {
+	byType := make(map[string]CleanupOption, len(existing))
+	order := make([]string, 0, len(existing)+5)
+
+	for _, opt := range existing {
+		if _, seen := byType[opt.ResourceType]; !seen {
+			order = append(order, opt.ResourceType)
+		}
+
+		byType[opt.ResourceType] = opt
+	}
+
+	for _, def := range defaultCleanupOptions() {
+		if _, seen := byType[def.ResourceType]; seen {
+			continue
+		}
+
+		byType[def.ResourceType] = def
+		order = append(order, def.ResourceType)
+	}
+
+	merged := make([]CleanupOption, 0, len(order))
+	for _, resourceType := range order {
+		merged = append(merged, byType[resourceType])
+	}
+
+	return merged
+}
+
 var defaultStoragePolicy = StoragePolicy{
 	StoreChunks:       false,
 	LivePreview:       false,
 	StoreRequestBody:  true,
 	StoreResponseBody: true,
-	CleanupOptions: []CleanupOption{
-		{
-			ResourceType: "requests",
-			Enabled:      false,
-			CleanupDays:  3,
-		},
-		{
-			ResourceType: "usage_logs",
-			Enabled:      false,
-			CleanupDays:  30,
-		},
-	},
+	CleanupOptions:    defaultCleanupOptions(),
 }
 
 var defaultRetryPolicy = RetryPolicy{
@@ -43,6 +94,7 @@ var defaultModelSettings = SystemModelSettings{
 	DefaultModelAPIIncludeAll:         false,
 	AutoReasoningEffort:               false,
 	ModelBlacklistRegex:               "",
+	HideUnroutableModelsInList:        false,
 	DeveloperSettings:                 []*DeveloperModelSettings{},
 }
 
@@ -83,9 +135,8 @@ var defaultVideoStorageSettings = VideoStorageSettings{
 	ScanLimit:           50,
 }
 
-var defaultQuotaEnforcementSettings = QuotaEnforcementSettings{
-	Enabled: false,
-	Mode:    QuotaEnforcementModeExhaustedOnly,
+var defaultQuotaRoutingSettings = QuotaRoutingSettings{
+	DefaultMode: objects.QuotaRoutingModeRemoveOnExhausted,
 }
 
 var defaultSecuritySettings = SecuritySettings{

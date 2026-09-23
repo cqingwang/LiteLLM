@@ -37,8 +37,12 @@ const (
 	FieldFormat = "format"
 	// FieldReasoningEffort holds the string denoting the reasoning_effort field in the database.
 	FieldReasoningEffort = "reasoning_effort"
+	// FieldChannelAPIKeySuffix holds the string denoting the channel_api_key_suffix field in the database.
+	FieldChannelAPIKeySuffix = "channel_api_key_suffix"
 	// FieldRequestBody holds the string denoting the request_body field in the database.
 	FieldRequestBody = "request_body"
+	// FieldResponseHeaders holds the string denoting the response_headers field in the database.
+	FieldResponseHeaders = "response_headers"
 	// FieldResponseBody holds the string denoting the response_body field in the database.
 	FieldResponseBody = "response_body"
 	// FieldResponseChunks holds the string denoting the response_chunks field in the database.
@@ -59,8 +63,6 @@ const (
 	FieldMetricsReasoningDurationMs = "metrics_reasoning_duration_ms"
 	// FieldRequestHeaders holds the string denoting the request_headers field in the database.
 	FieldRequestHeaders = "request_headers"
-	// FieldResponseHeaders holds the string denoting the response_headers field in the database.
-	FieldResponseHeaders = "response_headers"
 	// FieldRequestURL holds the string denoting the request_url field in the database.
 	FieldRequestURL = "request_url"
 	// FieldPassThroughApplied holds the string denoting the pass_through_applied field in the database.
@@ -109,7 +111,9 @@ var Columns = []string{
 	FieldModelID,
 	FieldFormat,
 	FieldReasoningEffort,
+	FieldChannelAPIKeySuffix,
 	FieldRequestBody,
+	FieldResponseHeaders,
 	FieldResponseBody,
 	FieldResponseChunks,
 	FieldErrorMessage,
@@ -120,7 +124,6 @@ var Columns = []string{
 	FieldMetricsFirstTokenLatencyMs,
 	FieldMetricsReasoningDurationMs,
 	FieldRequestHeaders,
-	FieldResponseHeaders,
 	FieldRequestURL,
 	FieldPassThroughApplied,
 }
@@ -148,6 +151,8 @@ var (
 	ExternalIDValidator func(string) error
 	// DefaultFormat holds the default value on creation for the "format" field.
 	DefaultFormat string
+	// ChannelAPIKeySuffixValidator is a validator for the "channel_api_key_suffix" field. It is called by the builders before save.
+	ChannelAPIKeySuffixValidator func(string) error
 	// DefaultStream holds the default value on creation for the "stream" field.
 	DefaultStream bool
 	// DefaultPassThroughApplied holds the default value on creation for the "pass_through_applied" field.
@@ -236,6 +241,11 @@ func ByFormat(opts ...sql.OrderTermOption) OrderOption {
 // ByReasoningEffort orders the results by the reasoning_effort field.
 func ByReasoningEffort(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldReasoningEffort, opts...).ToFunc()
+}
+
+// ByChannelAPIKeySuffix orders the results by the channel_api_key_suffix field.
+func ByChannelAPIKeySuffix(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldChannelAPIKeySuffix, opts...).ToFunc()
 }
 
 // ByErrorMessage orders the results by the error_message field.

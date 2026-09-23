@@ -11,17 +11,12 @@ import { Separator } from '@/components/ui/separator';
 import { Switch } from '@/components/ui/switch';
 import {
   useProviderQuotaCollectionSettings,
-  useQuotaEnforcementSettings,
+  useQuotaRoutingSettings,
   useUpdateProviderQuotaCollectionSettings,
-  useUpdateQuotaEnforcementSettings,
+  useUpdateQuotaRoutingSettings,
   type ProviderQuotaCollectionProvider,
-  type QuotaEnforcementMode,
+  type QuotaRoutingMode,
 } from '../data/system';
-
-interface QuotaEnforcementFormData {
-  enabled: boolean;
-  mode: QuotaEnforcementMode;
-}
 
 interface ProviderQuotaCollectionFormData {
   enabled: boolean;
@@ -30,28 +25,22 @@ interface ProviderQuotaCollectionFormData {
 
 export function QuotaSettings() {
   const { t } = useTranslation();
-  const { data: quotaSettings, isLoading: isQuotaSettingsLoading } = useQuotaEnforcementSettings();
+  const { data: routingSettings, isError: isRoutingSettingsError, isLoading: isRoutingSettingsLoading } = useQuotaRoutingSettings();
   const { data: collectionSettings, isLoading: isCollectionSettingsLoading } = useProviderQuotaCollectionSettings();
-  const updateQuotaEnforcementSettings = useUpdateQuotaEnforcementSettings();
+  const updateQuotaRoutingSettings = useUpdateQuotaRoutingSettings();
   const updateProviderQuotaCollectionSettings = useUpdateProviderQuotaCollectionSettings();
 
-  const [quotaFormData, setQuotaFormData] = useState<QuotaEnforcementFormData>({
-    enabled: false,
-    mode: 'EXHAUSTED_ONLY',
-  });
+  const [routingMode, setRoutingMode] = useState<QuotaRoutingMode>('IGNORE_QUOTA');
   const [collectionFormData, setCollectionFormData] = useState<ProviderQuotaCollectionFormData>({
     enabled: true,
     providers: [],
   });
 
   useEffect(() => {
-    if (quotaSettings) {
-      setQuotaFormData({
-        enabled: quotaSettings.enabled,
-        mode: quotaSettings.mode,
-      });
+    if (routingSettings) {
+      setRoutingMode(routingSettings.defaultMode);
     }
-  }, [quotaSettings]);
+  }, [routingSettings]);
 
   useEffect(() => {
     if (collectionSettings) {
@@ -65,9 +54,7 @@ export function QuotaSettings() {
   const handleCollectionProviderChange = useCallback((providerType: string, checked: boolean) => {
     setCollectionFormData((prev) => ({
       ...prev,
-      providers: prev.providers.map((provider) =>
-        provider.provider === providerType ? { ...provider, enabled: checked } : provider
-      ),
+      providers: prev.providers.map((provider) => (provider.provider === providerType ? { ...provider, enabled: checked } : provider)),
     }));
   }, []);
 
@@ -79,15 +66,15 @@ export function QuotaSettings() {
     [collectionFormData, updateProviderQuotaCollectionSettings]
   );
 
-  const handleQuotaSubmit = useCallback(
+  const handleRoutingSubmit = useCallback(
     async (e: React.FormEvent) => {
       e.preventDefault();
-      await updateQuotaEnforcementSettings.mutateAsync(quotaFormData);
+      await updateQuotaRoutingSettings.mutateAsync({ defaultMode: routingMode });
     },
-    [quotaFormData, updateQuotaEnforcementSettings]
+    [routingMode, updateQuotaRoutingSettings]
   );
 
-  if (isQuotaSettingsLoading || isCollectionSettingsLoading) {
+  if (isRoutingSettingsLoading || isCollectionSettingsLoading) {
     return (
       <div className='flex items-center justify-center p-8'>
         <Loader2 className='h-8 w-8 animate-spin' />
@@ -141,11 +128,7 @@ export function QuotaSettings() {
 
             <div className='flex justify-end'>
               <Button type='submit' disabled={updateProviderQuotaCollectionSettings.isPending} className='min-w-24'>
-                {updateProviderQuotaCollectionSettings.isPending ? (
-                  <Loader2 className='h-4 w-4 animate-spin' />
-                ) : (
-                  t('common.buttons.save')
-                )}
+                {updateProviderQuotaCollectionSettings.isPending ? <Loader2 className='h-4 w-4 animate-spin' /> : t('common.buttons.save')}
               </Button>
             </div>
           </form>
@@ -154,67 +137,41 @@ export function QuotaSettings() {
 
       <Card>
         <CardHeader>
-          <CardTitle>{t('system.quota.title')}</CardTitle>
-          <CardDescription>{t('system.quota.description')}</CardDescription>
+          <CardTitle>{t('system.quota.routing.title')}</CardTitle>
+          <CardDescription>{t('system.quota.routing.description')}</CardDescription>
         </CardHeader>
         <CardContent>
-          <form onSubmit={handleQuotaSubmit} className='space-y-6'>
-            <div className='flex items-center justify-between' id='quota-enabled-switch'>
-              <div className='space-y-0.5'>
-                <Label htmlFor='quota-enabled' className='text-base'>
-                  {t('system.quota.enabled.label')}
-                </Label>
-                <div className='text-muted-foreground text-sm'>{t('system.quota.enabled.description')}</div>
+          <form onSubmit={handleRoutingSubmit} className='space-y-6'>
+            <div className='space-y-2'>
+              <Label htmlFor='quota-routing-default-mode'>{t('system.quota.routing.mode.label')}</Label>
+              <div className='text-muted-foreground text-sm'>{t('system.quota.routing.mode.description')}</div>
+              <Select value={routingMode} onValueChange={(value) => setRoutingMode(value as QuotaRoutingMode)}>
+                <SelectTrigger id='quota-routing-default-mode' className='w-56'>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value='IGNORE_QUOTA'>{t('system.quota.routing.modes.IGNORE_QUOTA')}</SelectItem>
+                  <SelectItem value='REMOVE_ON_EXHAUSTED'>{t('system.quota.routing.modes.REMOVE_ON_EXHAUSTED')}</SelectItem>
+                  <SelectItem value='BACKPRESSURE'>{t('system.quota.routing.modes.BACKPRESSURE')}</SelectItem>
+                </SelectContent>
+              </Select>
+
+              <div className='bg-muted/50 mt-3 rounded-md border p-3'>
+                <div className='text-muted-foreground text-xs leading-relaxed'>
+                  {t(`system.quota.routing.modes.${routingMode}.description`)}
+                </div>
               </div>
-              <Switch
-                id='quota-enabled'
-                checked={quotaFormData.enabled}
-                onCheckedChange={(checked) => setQuotaFormData((prev) => ({ ...prev, enabled: checked }))}
-              />
             </div>
 
             <Separator />
 
-            {quotaFormData.enabled && (
-              <div className='space-y-4'>
-                <div className='space-y-2'>
-                  <Label htmlFor='quota-mode'>{t('system.quota.mode.label')}</Label>
-                  <div className='text-muted-foreground mb-2 text-sm'>{t('system.quota.mode.description')}</div>
-                  <Select
-                    value={quotaFormData.mode}
-                    onValueChange={(value) =>
-                      setQuotaFormData((prev) => ({ ...prev, mode: value as QuotaEnforcementMode }))
-                    }
-                  >
-                    <SelectTrigger id='quota-mode' className='w-56'>
-                      <SelectValue placeholder={t('system.quota.mode.placeholder')} />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value='EXHAUSTED_ONLY'>{t('system.quota.mode.options.exhaustedOnly')}</SelectItem>
-                      <SelectItem value='DE_PRIORITIZE'>{t('system.quota.mode.options.dePrioritize')}</SelectItem>
-                    </SelectContent>
-                  </Select>
-
-                  {quotaFormData.mode && (
-                    <div className='bg-muted/50 mt-3 rounded-md border p-3'>
-                      <div className='text-muted-foreground text-xs leading-relaxed'>
-                        {t(`system.quota.mode.documentation.${quotaFormData.mode}`)}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </div>
-            )}
-
-            <Separator />
-
             <div className='flex justify-end'>
-              <Button type='submit' disabled={updateQuotaEnforcementSettings.isPending} className='min-w-24'>
-                {updateQuotaEnforcementSettings.isPending ? (
-                  <Loader2 className='h-4 w-4 animate-spin' />
-                ) : (
-                  t('common.buttons.save')
-                )}
+              <Button
+                type='submit'
+                disabled={updateQuotaRoutingSettings.isPending || isRoutingSettingsLoading || isRoutingSettingsError || !routingSettings}
+                className='min-w-24'
+              >
+                {updateQuotaRoutingSettings.isPending ? <Loader2 className='h-4 w-4 animate-spin' /> : t('common.buttons.save')}
               </Button>
             </div>
           </form>

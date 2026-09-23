@@ -6,6 +6,7 @@ import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import { getTokenFromStorage } from '@/stores/authStore';
 import { useSelectedProjectId } from '@/stores/projectStore';
+import { copyTextToClipboard } from '@/lib/clipboard';
 import { extractNumberID } from '@/lib/utils';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -126,6 +127,7 @@ async function readPreviewStream(
   }
 }
 
+/** Request detail page with live preview streaming. */
 export default function RequestDetailPage() {
   const { t } = useTranslation();
   const { requestId } = useParams({ from: '/_authenticated/project/requests/$requestId' });
@@ -141,6 +143,7 @@ export default function RequestDetailPage() {
   const [previewFallbackActive, setPreviewFallbackActive] = useState(false);
   const previewCompletedRef = useRef(false);
   const previewChunkCountRef = useRef(0);
+  const previousRequestIdRef = useRef<string | null>(null);
 
   const { data: requestData, refetch: refetchRequest } = useRequest(requestId, {
     projectId: selectedProjectId,
@@ -154,13 +157,29 @@ export default function RequestDetailPage() {
     if (!requestData) {
       setPreviewRequest(null);
       setPreviewFallbackActive(false);
+      previousRequestIdRef.current = null;
       return;
     }
 
+    const isSameRequest = previousRequestIdRef.current === requestData.id;
+    previousRequestIdRef.current = requestData.id;
+
     if (requestData.status !== 'processing' || !requestData.stream) {
-      setPreviewRequest(null);
-      setIsPreviewStreaming(false);
-      setPreviewFallbackActive(false);
+      if (isSameRequest && previewRequest?.responseChunks?.length) {
+        setIsPreviewStreaming(false);
+        setPreviewFallbackActive(false);
+        setPreviewRequest((current) => {
+          if (!current) return null;
+          return {
+            ...requestData,
+            responseChunks: current.responseChunks,
+          };
+        });
+      } else {
+        setPreviewRequest(null);
+        setIsPreviewStreaming(false);
+        setPreviewFallbackActive(false);
+      }
       previewCompletedRef.current = false;
       previewChunkCountRef.current = 0;
     }
@@ -200,7 +219,7 @@ export default function RequestDetailPage() {
 
     const controller = new AbortController();
     let isDisposed = false;
-    let reconnectTimer: ReturnType<typeof window.setTimeout> | null = null;
+    let reconnectTimer: number | null = null;
     let reconnectAttempt = 0;
 
     previewCompletedRef.current = false;
@@ -246,7 +265,7 @@ export default function RequestDetailPage() {
         const response = await fetch(`/admin/requests/${encodeURIComponent(requestIdNumber)}/preview`, {
           headers: {
             Authorization: `Bearer ${token}`,
-            'X-Project-ID': selectedProjectId,
+            'X-Project-ID': selectedProjectId ?? '',
           },
           signal: controller.signal,
         });
@@ -330,7 +349,7 @@ export default function RequestDetailPage() {
           return;
         }
 
-        if (requestData.status === 'processing' && requestData.stream) {
+        if (requestData?.status === 'processing' && requestData?.stream) {
           setIsPreviewStreaming(false);
           scheduleReconnect();
         } else {
@@ -360,8 +379,7 @@ export default function RequestDetailPage() {
 
   const copyRequestID = async () => {
     try {
-      if (!navigator.clipboard) throw new Error('Clipboard unavailable');
-      await navigator.clipboard.writeText(request?.id ?? requestId);
+      await copyTextToClipboard(request?.id ?? requestId);
       toast.success(t('requests.actions.copied'));
     } catch {
       toast.error(t('common.errors.copyFailed'));

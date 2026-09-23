@@ -173,26 +173,19 @@ func (r *mutationResolver) UpdateVideoStorageSettings(ctx context.Context, input
 	return true, nil
 }
 
-// UpdateQuotaEnforcementSettings is the resolver for the updateQuotaEnforcementSettings field.
-func (r *mutationResolver) UpdateQuotaEnforcementSettings(ctx context.Context, input UpdateQuotaEnforcementSettingsInput) (bool, error) {
-	current, err := r.systemService.QuotaEnforcementSettings(ctx)
-	if err != nil {
-		return false, fmt.Errorf("failed to read current quota enforcement settings: %w", err)
-	}
-	newSettings := biz.QuotaEnforcementSettings{
-		Enabled: current.Enabled,
-		Mode:    current.Mode,
-	}
-	if input.Enabled != nil {
-		newSettings.Enabled = *input.Enabled
-	}
-	if input.Mode != nil {
-		newSettings.Mode = *input.Mode
+// UpdateQuotaRoutingSettings is the resolver for the updateQuotaRoutingSettings field.
+func (r *mutationResolver) UpdateQuotaRoutingSettings(ctx context.Context, input UpdateQuotaRoutingSettingsInput) (bool, error) {
+	if !authz.HasScope(ctx, scopes.ScopeWriteSettings) {
+		return false, fmt.Errorf("permission denied: requires write_settings scope")
 	}
 
-	err = r.systemService.SetQuotaEnforcementSettings(ctx, newSettings)
-	if err != nil {
-		return false, fmt.Errorf("failed to update quota enforcement settings: %w", err)
+	settings := r.systemService.QuotaRoutingSettingsOrDefault(ctx)
+	if input.DefaultMode != nil {
+		settings.DefaultMode = *input.DefaultMode
+	}
+
+	if err := r.systemService.SetQuotaRoutingSettings(ctx, settings); err != nil {
+		return false, fmt.Errorf("failed to update quota routing settings: %w", err)
 	}
 
 	return true, nil
@@ -346,6 +339,61 @@ func (r *mutationResolver) UpdatePassThroughSettings(ctx context.Context, input 
 	return true, nil
 }
 
+// UpdateUsageCostInjectionSettings is the resolver for the updateUsageCostInjectionSettings field.
+func (r *mutationResolver) UpdateUsageCostInjectionSettings(ctx context.Context, input UpdateUsageCostInjectionSettingsInput) (bool, error) {
+	err := r.systemService.SetInjectUsageCostEnabled(ctx, input.Enabled)
+	if err != nil {
+		return false, fmt.Errorf("failed to update usage cost injection settings: %w", err)
+	}
+
+	return true, nil
+}
+
+// UpdateCatalogSettings is the resolver for the updateCatalogSettings field.
+func (r *mutationResolver) UpdateCatalogSettings(ctx context.Context, input UpdateCatalogSettingsInput) (bool, error) {
+	if !scopes.UserHasScope(ctx, scopes.ScopeWriteSettings) {
+		return false, fmt.Errorf("permission denied: requires write_settings scope")
+	}
+
+	settings := r.systemService.CatalogSettingsOrDefault(ctx)
+	if input.UpstreamURL != nil {
+		settings.UpstreamURL = *input.UpstreamURL
+	}
+
+	if input.RefreshSeconds != nil {
+		settings.RefreshSeconds = *input.RefreshSeconds
+	}
+
+	if err := r.systemService.SetCatalogSettings(ctx, settings); err != nil {
+		return false, fmt.Errorf("failed to update catalog settings: %w", err)
+	}
+
+	if r.catalogService != nil {
+		r.catalogService.Invalidate()
+		r.catalogService.Reschedule(ctx, r.scheduler)
+	}
+
+	return true, nil
+}
+
+// RefreshProvidersCatalog is the resolver for the refreshProvidersCatalog field.
+func (r *mutationResolver) RefreshProvidersCatalog(ctx context.Context) (*ProvidersCatalog, error) {
+	if !scopes.UserHasScope(ctx, scopes.ScopeWriteSettings) {
+		return nil, fmt.Errorf("permission denied: requires write_settings scope")
+	}
+
+	if r.catalogService == nil {
+		return nil, fmt.Errorf("catalog service is not configured")
+	}
+
+	snapshot, err := r.catalogService.Refresh(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to refresh providers catalog: %w", err)
+	}
+
+	return providersCatalogFromSnapshot(snapshot), nil
+}
+
 // ClearCache is the resolver for the clearCache field.
 func (r *mutationResolver) ClearCache(ctx context.Context, input ClearCacheInput) (*ClearCachePayload, error) {
 	user, ok := contexts.GetUser(ctx)
@@ -402,6 +450,43 @@ func (r *queryResolver) PreviewGcCleanup(ctx context.Context, input gc.TriggerGc
 		result[i] = &items[i]
 	}
 	return result, nil
+}
+
+// ProvidersCatalog is the resolver for the providersCatalog field.
+func (r *queryResolver) ProvidersCatalog(ctx context.Context, filtered *bool) (*ProvidersCatalog, error) {
+	if !scopes.UserHasScope(ctx, scopes.ScopeReadChannels) {
+		return nil, fmt.Errorf("permission denied: requires read_channels scope")
+	}
+
+	if r.catalogService == nil {
+		return nil, fmt.Errorf("catalog service is not configured")
+	}
+
+	wantFiltered := true
+	if filtered != nil {
+		wantFiltered = *filtered
+	}
+
+	snapshot, err := r.catalogService.Snapshot(ctx, wantFiltered)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load providers catalog: %w", err)
+	}
+
+	return providersCatalogFromSnapshot(snapshot), nil
+}
+
+// CatalogSettings is the resolver for the catalogSettings field.
+func (r *queryResolver) CatalogSettings(ctx context.Context) (*biz.CatalogSettings, error) {
+	if !scopes.UserHasScope(ctx, scopes.ScopeReadSettings) {
+		return nil, fmt.Errorf("permission denied: requires read_settings scope")
+	}
+
+	settings, err := r.systemService.CatalogSettings(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get catalog settings: %w", err)
+	}
+
+	return settings, nil
 }
 
 // SystemStatus is the resolver for the systemStatus field.
@@ -555,9 +640,9 @@ func (r *queryResolver) VideoStorageSettings(ctx context.Context) (*biz.VideoSto
 	return r.systemService.VideoStorageSettings(ctx)
 }
 
-// QuotaEnforcementSettings is the resolver for the quotaEnforcementSettings field.
-func (r *queryResolver) QuotaEnforcementSettings(ctx context.Context) (*biz.QuotaEnforcementSettings, error) {
-	return r.systemService.QuotaEnforcementSettings(ctx)
+// QuotaRoutingSettings is the resolver for the quotaRoutingSettings field.
+func (r *queryResolver) QuotaRoutingSettings(ctx context.Context) (*biz.QuotaRoutingSettings, error) {
+	return r.systemService.QuotaRoutingSettings(ctx)
 }
 
 // ProviderQuotaCollectionSettings is the resolver for the providerQuotaCollectionSettings field.
@@ -600,6 +685,18 @@ func (r *queryResolver) PassThroughSettings(ctx context.Context) (*PassThroughSe
 	}
 
 	return &PassThroughSettings{
+		Enabled: enabled,
+	}, nil
+}
+
+// UsageCostInjectionSettings is the resolver for the usageCostInjectionSettings field.
+func (r *queryResolver) UsageCostInjectionSettings(ctx context.Context) (*UsageCostInjectionSettings, error) {
+	enabled, err := r.systemService.InjectUsageCostEnabled(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get usage cost injection settings: %w", err)
+	}
+
+	return &UsageCostInjectionSettings{
 		Enabled: enabled,
 	}, nil
 }

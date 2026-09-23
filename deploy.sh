@@ -3,13 +3,13 @@
 set -Eeuo pipefail
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-image_tag="llmapi:latest"
+image_tag="litellm:latest"
 platform="linux/amd64"
 
 usage() {
   printf '%s\n' "用法: $0 --build | --dev"
   printf '%s\n' '配置:'
-  printf '%s\n' '  镜像标签                llmapi:latest'
+  printf '%s\n' '  镜像标签                litellm:latest'
   printf '%s\n' '  目标平台                linux/amd64'
   printf '%s\n' '  AXONHUB_DEV_CONTAINER   开发容器名，默认 axonhub-dev'
   printf '%s\n' '  AXONHUB_DEV_PORT        宿主机端口，默认 8090'

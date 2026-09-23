@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Copy, Download } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
+import { copyTextToClipboard } from '@/lib/clipboard';
 import { JsonViewer } from '@/components/json-tree-view';
 import { Button } from '@/components/ui/button';
 
@@ -23,11 +24,15 @@ export function ChunkItem({ chunk, index }: ChunkItemProps) {
     }
   };
 
-  const copyToClipboard = () => {
-    navigator.clipboard.writeText(formatJson(chunk));
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-    toast.success(t('requests.actions.copy'));
+  const copyToClipboard = async () => {
+    try {
+      await copyTextToClipboard(formatJson(chunk));
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+      toast.success(t('requests.actions.copy'));
+    } catch {
+      toast.error(t('common.errors.copyFailed'));
+    }
   };
 
   const downloadChunk = () => {
@@ -50,7 +55,7 @@ export function ChunkItem({ chunk, index }: ChunkItemProps) {
           <span className='text-muted-foreground text-sm font-medium'>Chunk {index + 1}</span>
         </div>
         <div className='min-w-0 flex-1'>
-          <JsonViewer data={chunk} rootName='' defaultExpanded={false} className='text-sm' />
+          <JsonViewer data={chunk} rootName='' defaultExpanded={false} className='font-sans text-xs' />
         </div>
         <div className='flex gap-2'>
           <Button

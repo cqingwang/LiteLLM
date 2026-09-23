@@ -3,7 +3,9 @@ package orchestrator
 import (
 	"context"
 	"fmt"
+	"mime"
 	"net/http"
+	"strings"
 	"sync"
 
 	"github.com/tidwall/sjson"
@@ -14,19 +16,20 @@ import (
 	"github.com/looplj/axonhub/llm/httpclient"
 	"github.com/looplj/axonhub/llm/pipeline"
 	"github.com/looplj/axonhub/llm/streams"
+	"github.com/looplj/axonhub/llm/transformer"
 )
 
-// codexResponsesPassThroughHeaders contains client metadata that Codex-compatible
-// Responses upstreams use to select protocol behavior. Keep this as an explicit
-// allowlist: inbound credentials and transport headers must never be copied.
+// codexResponsesPassThroughHeaders contains Codex identity metadata that can
+// accompany a pass-through body. Keep this as an explicit allowlist: inbound
+// credentials, transport headers, and protocol-selection headers are never copied.
 var codexResponsesPassThroughHeaders = []string{
 	"X-Codex-Turn-Metadata",
+	"X-Codex-Turn-State",
 	"X-Codex-Window-Id",
 	"X-Client-Request-Id",
 	"X-Codex-Beta-Features",
 	"Session-Id",
 	"Originator",
-	"X-OpenAI-Internal-Codex-Responses-Lite",
 	"Thread-Id",
 }
 
@@ -97,11 +100,14 @@ func applyPassThroughRequestBody(outbound *PersistentOutboundTransformer, system
 
 		channel := outbound.GetCurrentChannel()
 		llmReq := outbound.state.LlmRequest
+		if !outbound.allowPassThroughBody(ctx, llmReq, request) {
+			return request, nil
+		}
 
 		// Multipart bodies cannot be reused: the outbound transformer rebuilds the
 		// multipart payload with a new boundary in Content-Type, so replaying the inbound
 		// bytes would mismatch the header, and form fields cannot be patched via sjson.
-		if !passThroughBodySupported(llmReq.APIFormat) {
+		if !passThroughBodySupported(llmReq) {
 			return request, nil
 		}
 
@@ -122,16 +128,36 @@ func applyPassThroughRequestBody(outbound *PersistentOutboundTransformer, system
 		}
 
 		request.Body = body
+
+		// The replayed body keeps the inbound media type: sync Content-Type so a JSON
+		// image edit is not sent with the multipart header the outbound transformer built.
+		if contentType := llmReq.RawRequest.Headers.Get("Content-Type"); contentType != "" {
+			if request.Headers == nil {
+				request.Headers = make(http.Header)
+			}
+
+			request.Headers.Set("Content-Type", contentType)
+			request.ContentType = contentType
+		}
+
 		outbound.state.PassThroughApplied = true
 
 		return request, nil
 	})
 }
 
-// applyPassThroughRequestHeaders forwards the Codex Responses metadata paired with
-// a pass-through body. These headers are part of the client's protocol negotiation;
-// dropping them while replaying the original body can change how a compatible
-// upstream interprets the same request.
+func (p *PersistentOutboundTransformer) allowPassThroughBody(ctx context.Context, llmReq *llm.Request, providerReq *httpclient.Request) bool {
+	policy, ok := p.wrapped.(transformer.PassThroughBodyPolicy)
+	if !ok {
+		return true
+	}
+
+	return policy.AllowPassThroughBody(ctx, llmReq, providerReq)
+}
+
+// applyPassThroughRequestHeaders forwards Codex identity metadata paired with
+// a pass-through body. Protocol-selection headers such as Responses Lite are
+// deliberately excluded: the Codex transformer decides whether they apply.
 func applyPassThroughRequestHeaders(outbound *PersistentOutboundTransformer) pipeline.Middleware {
 	return pipeline.OnRawRequest("pass-through-request-headers", func(_ context.Context, request *httpclient.Request) (*httpclient.Request, error) {
 		if !outbound.state.PassThroughApplied || outbound.state.LlmRequest == nil ||
@@ -181,34 +207,59 @@ func mergePassThroughRequestBody(rawBody []byte, apiFormat llm.APIFormat, model 
 }
 
 // passThroughBodySupported reports whether the raw inbound body can safely replace the
-// outbound request body. Multipart formats are excluded.
-func passThroughBodySupported(apiFormat llm.APIFormat) bool {
-	//nolint:exhaustive // only multipart formats are excluded.
-	switch apiFormat {
+// outbound request body. Multipart bodies cannot be reused: the outbound transformer
+// rebuilds the multipart payload with a new boundary in Content-Type, so replaying the
+// inbound bytes would mismatch the header, and form fields cannot be patched via sjson.
+// JSON image edits are replayable because their model field can be patched in place.
+func passThroughBodySupported(llmReq *llm.Request) bool {
+	//nolint:exhaustive // only multipart formats are excluded or content-type checked.
+	switch llmReq.APIFormat {
 	case llm.APIFormatOpenAITranscription,
 		llm.APIFormatOpenAITranslation,
-		llm.APIFormatOpenAIImageEdit,
 		llm.APIFormatOpenAIImageVariation:
 		return false
+	case llm.APIFormatOpenAIImageEdit:
+		// Only the image edit inbound accepts JSON today; for the other formats this
+		// branch is unreachable because their inbounds still require multipart.
+		if llmReq.RawRequest == nil {
+			return false
+		}
+
+		mediaType, _, err := mime.ParseMediaType(llmReq.RawRequest.Headers.Get("Content-Type"))
+		return err == nil && strings.EqualFold(mediaType, "application/json")
+	case llm.APIFormatOpenAIVideo:
+		if llmReq.RawRequest == nil {
+			return false
+		}
+
+		return !strings.HasPrefix(strings.ToLower(llmReq.RawRequest.Headers.Get("Content-Type")), "multipart/")
 	default:
 		return true
 	}
 }
 
 func passThroughBodyNeedsModelPatch(apiFormat llm.APIFormat) bool {
-	//nolint:exhaustive // ohter format do not need model field.
+	//nolint:exhaustive // other formats do not need a model field.
 	switch apiFormat {
 	case llm.APIFormatOpenAIChatCompletion,
+		llm.APIFormatOpenAICompletion,
 		llm.APIFormatOpenAIResponse,
 		llm.APIFormatOpenAIResponseCompact,
 		llm.APIFormatOpenAIEmbedding,
 		llm.APIFormatOpenAIModeration,
+		llm.APIFormatOpenAIAlphaSearch,
+		llm.APIFormatOpenAIImageGeneration,
+		llm.APIFormatOpenAIVideo,
 		llm.APIFormatJinaEmbedding,
 		llm.APIFormatJinaRerank,
 		llm.APIFormatAnthropicMessage,
 		// Speech (TTS) has a JSON body with a model field; transcription/translation
 		// use multipart bodies that cannot be patched via sjson, so they are excluded.
-		llm.APIFormatOpenAISpeech:
+		llm.APIFormatOpenAISpeech,
+		// Image edits submitted as application/json carry a top-level model field.
+		// Multipart edit bodies never reach this point (passThroughBodySupported
+		// rejects them), so sjson patching only ever runs on JSON payloads.
+		llm.APIFormatOpenAIImageEdit:
 		return true
 	default:
 		return false
@@ -251,8 +302,10 @@ func applyUserAgentPassThrough(outbound *PersistentOutboundTransformer, systemSe
 					request.Headers.Set("User-Agent", clientUA)
 				}
 			}
-		} else {
-			// Pass-through disabled: use AxonHub's default User-Agent
+		} else if request.Headers.Get("User-Agent") == "" {
+			// Pass-through disabled: use AxonHub's default User-Agent, unless the
+			// outbound transformer already set a provider-required one (e.g.
+			// GitHubCopilotChat on Copilot channels).
 			request.Headers.Set("User-Agent", "axonhub/1.0")
 		}
 

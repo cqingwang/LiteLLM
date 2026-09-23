@@ -22,15 +22,19 @@ import (
 )
 
 var (
-	_ transformer.Outbound               = (*OutboundTransformer)(nil)
-	_ pipeline.ChannelCustomizedExecutor = (*OutboundTransformer)(nil)
+	_ transformer.Outbound                  = (*OutboundTransformer)(nil)
+	_ transformer.TransportRequestFinalizer = (*OutboundTransformer)(nil)
+	_ pipeline.ChannelCustomizedExecutor    = (*OutboundTransformer)(nil)
 )
 
 // Config holds all configuration for the OpenAI Responses outbound transformer.
 const (
-	TransportHTTP       = "http"
-	TransportWebSocket  = "websocket"
-	ResponsesLiteHeader = "X-OpenAI-Internal-Codex-Responses-Lite"
+	TransportHTTP      = "http"
+	TransportWebSocket = "websocket"
+	// ResponsesLiteHeader is the Codex Responses Lite signal. It uses the
+	// canonical spelling ("Openai"): http.Header canonicalizes keys, so lookups
+	// match whatever case a Codex client sends.
+	ResponsesLiteHeader = "X-Openai-Internal-Codex-Responses-Lite"
 )
 
 type Config struct {
@@ -93,8 +97,11 @@ func NewOutboundTransformerWithConfig(config *Config) (*OutboundTransformer, err
 }
 
 func (t *OutboundTransformer) CustomizeExecutor(executor pipeline.Executor) pipeline.Executor {
-	if t == nil || t.config == nil || t.config.Transport != TransportWebSocket {
+	if t == nil || t.config == nil {
 		return executor
+	}
+	if t.config.Transport != TransportWebSocket {
+		return &httpTransportExecutor{inner: executor, finalize: t.FinalizeTransportRequest}
 	}
 
 	if !ExecutorComparable(executor) {
@@ -115,6 +122,14 @@ func (t *OutboundTransformer) CustomizeExecutor(executor pipeline.Executor) pipe
 	t.webSocketExecutors[executor] = webSocketExecutor
 
 	return webSocketExecutor
+}
+
+func (t *OutboundTransformer) FinalizeTransportRequest(request *httpclient.Request) *httpclient.Request {
+	if t == nil || t.config == nil || t.config.Transport == TransportWebSocket {
+		return request
+	}
+
+	return PrepareHTTPTransportRequest(request, false)
 }
 
 func (t *OutboundTransformer) Stop() {
@@ -222,6 +237,7 @@ func (t *OutboundTransformer) TransformRequest(ctx context.Context, llmReq *llm.
 	apiKey := t.config.APIKeyProvider.Get(ctx)
 
 	var tools []Tool
+	namespaceIndexes := make(map[string]int)
 	// Convert tools to Responses API format
 	for _, item := range llmReq.Tools {
 		switch item.Type {
@@ -241,7 +257,16 @@ func (t *OutboundTransformer) TransformRequest(ctx context.Context, llmReq *llm.
 			tools = append(tools, tool)
 		case "function":
 			tool := convertFunctionToTool(item)
-			tools = append(tools, tool)
+			if namespace := item.Function.Namespace; namespace != "" {
+				if index, ok := namespaceIndexes[namespace]; ok {
+					tools[index].Tools = append(tools[index].Tools, tool)
+				} else {
+					namespaceIndexes[namespace] = len(tools)
+					tools = append(tools, Tool{Type: "namespace", Name: namespace, Tools: []Tool{tool}})
+				}
+			} else {
+				tools = append(tools, tool)
+			}
 		default:
 			// Skip unsupported tool types
 			continue

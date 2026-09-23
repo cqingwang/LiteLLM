@@ -144,14 +144,14 @@ func (c *SyntheticQuotaChecker) parseResponse(body []byte) (QuotaData, error) {
 		rawData["rollingFiveHourLimit"] = convertSyntheticRollingFiveHourLimitToMap(response.RollingFiveHourLimit)
 	}
 
-	return QuotaData{
+	return NormalizeQuotaData(QuotaData{
 		Status:       normalizedStatus,
 		ProviderType: "synthetic",
 		RawData:      rawData,
 		NextResetAt:  nextResetAt,
 		Ready:        IsReadyStatus(normalizedStatus),
 		Limits:       limits,
-	}, nil
+	}), nil
 }
 
 func (c *SyntheticQuotaChecker) SupportsChannel(ch *ent.Channel) bool {
@@ -193,7 +193,7 @@ func buildSyntheticLimitStatuses(weekly *SyntheticWeeklyTokenLimit, fiveHour *Sy
 			usageRatio = 1.0
 		} else if fiveHour.TickPercent != nil {
 			usageRatio = *fiveHour.TickPercent
-			if usageRatio > WarningThresholdRatio {
+			if usageRatio >= WarningThresholdRatio {
 				status = "warning"
 			}
 		}
@@ -205,12 +205,15 @@ func buildSyntheticLimitStatuses(weekly *SyntheticWeeklyTokenLimit, fiveHour *Sy
 			}
 		}
 
+		// The rolling window's NextTickAt is a regeneration tick, not the end of
+		// a fixed window, so no period start can be derived from it.
 		limits = append(limits, QuotaLimitStatus{
 			Type:        QuotaLimitTypeToken,
 			Status:      status,
 			UsageRatio:  usageRatio,
 			Ready:       IsReadyStatus(status),
 			NextResetAt: resetAt,
+			Window:      QuotaWindow5h,
 		})
 	}
 
@@ -230,7 +233,7 @@ func weeklyTokenLimitStatus(weekly *SyntheticWeeklyTokenLimit) QuotaLimitStatus 
 
 		if usageRatio >= 1.0 {
 			status = "exhausted"
-		} else if usageRatio > WarningThresholdRatio {
+		} else if usageRatio >= WarningThresholdRatio {
 			status = "warning"
 		}
 	}
@@ -243,12 +246,15 @@ func weeklyTokenLimitStatus(weekly *SyntheticWeeklyTokenLimit) QuotaLimitStatus 
 		}
 	}
 
+	// NextRegenAt marks the next incremental regeneration of the weekly pool
+	// rather than a hard window boundary, so it cannot anchor a period start.
 	return QuotaLimitStatus{
 		Type:        QuotaLimitTypeToken,
 		Status:      status,
 		UsageRatio:  usageRatio,
 		Ready:       IsReadyStatus(status),
 		NextResetAt: resetAt,
+		Window:      QuotaWindowWeekly,
 	}
 }
 

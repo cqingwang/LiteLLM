@@ -24,12 +24,15 @@ import (
 	"github.com/looplj/axonhub/internal/log"
 	"github.com/looplj/axonhub/internal/objects"
 	"github.com/looplj/axonhub/internal/pkg/xcache"
+	"github.com/looplj/axonhub/internal/pkg/xerrors"
 	"github.com/looplj/axonhub/internal/pkg/xregexp"
 	"github.com/looplj/axonhub/internal/pkg/xtime"
 	"github.com/looplj/axonhub/llm/httpclient"
 )
 
 const (
+	legacyQuotaEnforcementSettingsKey = "quota_enforcement_settings"
+
 	maxRetryResponseTimeoutSeconds  = 600
 	maxChannelSettingUpdateAttempts = 5
 )
@@ -112,9 +115,19 @@ const (
 	//nolint:gosec // Not a secret.
 	SystemKeyPassThrough = "system_pass_through"
 
+	// SystemKeyInjectUsageCost is the key used to store whether AxonHub injects
+	// calculated cost onto client-facing usage.cost. Default is false.
+	SystemKeyInjectUsageCost = "system_inject_usage_cost"
+
 	// SystemKeyQuotaEnforcementSettings is the key used to store the quota enforcement settings.
 	// The value is JSON-encoded QuotaEnforcementSettings struct.
-	SystemKeyQuotaEnforcementSettings = "quota_enforcement_settings"
+	SystemKeyQuotaEnforcementSettings = legacyQuotaEnforcementSettingsKey
+
+	// SystemKeyQuotaRoutingSettings is the key used to store quota routing settings.
+	SystemKeyQuotaRoutingSettings = "quota_routing_settings"
+
+	// SystemKeyQuotaRoutingMigrationDone marks completion of quota routing migration.
+	SystemKeyQuotaRoutingMigrationDone = "quota_routing_migration_done"
 
 	// SystemKeySecuritySettings is the key used to store security settings.
 	// The value is JSON-encoded SecuritySettings struct.
@@ -123,7 +136,7 @@ const (
 
 // SystemGeneralSettings represents general system configuration settings.
 type SystemGeneralSettings struct {
-	// CurrencyCode is the code used for currency display (e.g., USD, RMB).
+	// CurrencyCode is the code used for currency display (e.g., USD, CNY).
 	CurrencyCode string `json:"currency_code"`
 	Timezone     string `json:"timezone"`
 }
@@ -141,73 +154,22 @@ type VideoStorageSettings struct {
 	ScanLimit int `json:"scan_limit"`
 }
 
-// QuotaEnforcementMode defines how quota enforcement is applied.
-type QuotaEnforcementMode string
-
-const (
-	// QuotaEnforcementModeExhaustedOnly filters out channels with exhausted quota only.
-	QuotaEnforcementModeExhaustedOnly QuotaEnforcementMode = "exhausted_only"
-	// QuotaEnforcementModeDePrioritize deprioritizes exhausted channels and penalizes warning channels.
-	QuotaEnforcementModeDePrioritize QuotaEnforcementMode = "de_prioritize"
-)
-
-func (m QuotaEnforcementMode) MarshalGQL(w io.Writer) {
-	var s string
-
-	switch m {
-	case QuotaEnforcementModeExhaustedOnly:
-		s = "EXHAUSTED_ONLY"
-	case QuotaEnforcementModeDePrioritize:
-		s = "DE_PRIORITIZE"
-	default:
-		s = "EXHAUSTED_ONLY"
-	}
-
-	_, _ = io.WriteString(w, `"`+s+`"`)
+// QuotaRoutingSettings represents the quota routing policy.
+type QuotaRoutingSettings struct {
+	DefaultMode objects.QuotaRoutingMode `json:"defaultMode"`
 }
 
-func (m *QuotaEnforcementMode) UnmarshalGQL(v any) error {
-	str, ok := v.(string)
-	if !ok {
-		return fmt.Errorf("QuotaEnforcementMode must be a string")
-	}
-
-	switch str {
-	case "EXHAUSTED_ONLY":
-		*m = QuotaEnforcementModeExhaustedOnly
-	case "DE_PRIORITIZE":
-		*m = QuotaEnforcementModeDePrioritize
-	default:
-		return fmt.Errorf("invalid QuotaEnforcementMode: %s", str)
-	}
-
-	return nil
+// QuotaRoutingSettingsProvider supplies the effective quota routing settings.
+type QuotaRoutingSettingsProvider interface {
+	QuotaRoutingSettingsOrDefault(ctx context.Context) QuotaRoutingSettings
 }
 
-func (m *QuotaEnforcementMode) UnmarshalJSON(data []byte) error {
-	var raw string
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return fmt.Errorf("invalid QuotaEnforcementMode: %w", err)
-	}
-
-	switch raw {
-	case "EXHAUSTED_ONLY", string(QuotaEnforcementModeExhaustedOnly):
-		*m = QuotaEnforcementModeExhaustedOnly
-	case "DE_PRIORITIZE", string(QuotaEnforcementModeDePrioritize):
-		*m = QuotaEnforcementModeDePrioritize
-	default:
-		return fmt.Errorf("invalid QuotaEnforcementMode: %q", raw)
-	}
-
-	return nil
-}
-
-// QuotaEnforcementSettings represents quota enforcement configuration.
-type QuotaEnforcementSettings struct {
-	// Enabled controls whether quota enforcement is active.
-	Enabled bool `json:"enabled"`
-	// Mode defines how quota is enforced.
-	Mode QuotaEnforcementMode `json:"mode"`
+type legacyQuotaEnforcementSettings struct {
+	Enabled           bool   `json:"enabled"`
+	ExhaustedOnly     bool   `json:"exhaustedOnly"`
+	DePrioritize      bool   `json:"dePrioritize"`
+	AllowedChannelIDs []int  `json:"allowedChannelIDs"`
+	Mode              string `json:"mode"`
 }
 
 // SecuritySettings represents system-wide request access controls.
@@ -288,6 +250,19 @@ type CleanupOption struct {
 	Enabled      bool   `json:"enabled"`
 	CleanupDays  int    `json:"cleanup_days"`
 }
+
+const (
+	// CleanupResourceRequests deletes request rows, executions, traces, and threads.
+	CleanupResourceRequests = "requests"
+	// CleanupResourceUsageLogs deletes usage log rows.
+	CleanupResourceUsageLogs = "usage_logs"
+	// CleanupResourceRequestBodies strips stored request bodies and headers only.
+	CleanupResourceRequestBodies = "request_bodies"
+	// CleanupResourceResponseBodies strips stored response bodies only.
+	CleanupResourceResponseBodies = "response_bodies"
+	// CleanupResourceResponseChunks strips stored stream chunks only.
+	CleanupResourceResponseChunks = "response_chunks"
+)
 
 const (
 	// LoadBalancerStrategyAdaptive is a dynamic load balancer strategy that adapts to the current load.
@@ -423,8 +398,12 @@ type AutoDisableChannel struct {
 	// Enabled controls whether auto-disable channel is active
 	Enabled bool `json:"enabled"`
 
-	// Statuses defines the status codes and times to auto-disable a channel
-	Statuses []AutoDisableChannelStatus `json:"statuses"`
+	// Rules are the global auto-disable rules, sharing the channel rule shape.
+	Rules []objects.APIKeyAutoDisableRule `json:"rules"`
+
+	// Statuses is read-only compatibility for legacy retry_policy JSON. It is
+	// migrated into Rules by normalizeRetryPolicy and never written back.
+	Statuses []AutoDisableChannelStatus `json:"statuses,omitempty"`
 }
 
 type AutoDisableChannelStatus struct {
@@ -487,6 +466,12 @@ type SystemModelSettings struct {
 	// API output. Configured Model entities are not affected. An empty string
 	// disables the filter. Only effective when QueryAllChannelModels is true.
 	ModelBlacklistRegex string `json:"model_blacklist_regex"`
+
+	// HideUnroutableModelsInList hides configured Model entities from public
+	// model-list APIs when the current API key has no structurally routable
+	// channel for that entity. It does not change request 422 semantics and
+	// does not affect the admin GraphQL models table.
+	HideUnroutableModelsInList bool `json:"hide_unroutable_models_in_list"`
 
 	// DeveloperSettings stores reusable channel association rules keyed by model developer.
 	// Models with the same developer inherit these associations before applying their
@@ -1018,6 +1003,8 @@ func (s *SystemService) StoragePolicy(ctx context.Context) (*StoragePolicy, erro
 		policy.StoreResponseBody = true
 	}
 
+	policy.CleanupOptions = mergeCleanupOptions(policy.CleanupOptions)
+
 	return &policy, nil
 }
 
@@ -1077,7 +1064,12 @@ func (s *SystemService) RetryPolicy(ctx context.Context) (*RetryPolicy, error) {
 }
 
 func (s *SystemService) RetryPolicyOrDefault(ctx context.Context) *RetryPolicy {
-	policy, err := s.RetryPolicy(ctx)
+	// Internal callers (stream processing, error handling, channel auto-disable,
+	// load balancing) run with API-key or background contexts that carry no user
+	// principal, which the Ent privacy layer rejects with "no user in context".
+	// Reading the global retry policy is a system-scoped operation, so apply a
+	// scoped system bypass instead of silently falling back to the default.
+	policy, err := s.RetryPolicy(authz.WithSystemBypass(ctx, "retry-policy-or-default"))
 	if err != nil {
 		if ent.IsNotFound(err) {
 			return lo.ToPtr(defaultRetryPolicy)
@@ -1094,6 +1086,12 @@ func (s *SystemService) RetryPolicyOrDefault(ctx context.Context) *RetryPolicy {
 // SetRetryPolicy sets the retry policy configuration.
 func (s *SystemService) SetRetryPolicy(ctx context.Context, policy *RetryPolicy) error {
 	normalizeRetryPolicy(policy)
+
+	rules, err := normalizeAutoDisableRules(policy.AutoDisableChannel.Rules, false)
+	if err != nil {
+		return xerrors.ValidationError(err.Error())
+	}
+	policy.AutoDisableChannel.Rules = rules
 
 	jsonBytes, err := json.Marshal(policy)
 	if err != nil {
@@ -1146,8 +1144,20 @@ func normalizeRetryPolicy(policy *RetryPolicy) {
 		policy.NonStreamResponseTimeoutSeconds = maxRetryResponseTimeoutSeconds
 	}
 
-	if policy.AutoDisableChannel.Statuses == nil {
-		policy.AutoDisableChannel.Statuses = []AutoDisableChannelStatus{}
+	if len(policy.AutoDisableChannel.Rules) == 0 && len(policy.AutoDisableChannel.Statuses) > 0 {
+		rules := make([]objects.APIKeyAutoDisableRule, 0, len(policy.AutoDisableChannel.Statuses))
+		for _, statusConfig := range policy.AutoDisableChannel.Statuses {
+			rules = append(rules, objects.APIKeyAutoDisableRule{
+				StatusCodes: []int{statusConfig.Status},
+				Times:       statusConfig.Times,
+				Action:      objects.APIKeyAutoDisableActionPermanent,
+			})
+		}
+		policy.AutoDisableChannel.Rules = rules
+	}
+	policy.AutoDisableChannel.Statuses = nil
+	if policy.AutoDisableChannel.Rules == nil {
+		policy.AutoDisableChannel.Rules = []objects.APIKeyAutoDisableRule{}
 	}
 
 	switch policy.UpstreamErrorPolicy.Mode {
@@ -1781,57 +1791,107 @@ func (s *SystemService) SetPassThrough(ctx context.Context, enabled bool) error 
 	return s.setSystemValue(ctx, SystemKeyPassThrough, strValue)
 }
 
-// QuotaEnforcementSettings retrieves the quota enforcement settings.
-func (s *SystemService) QuotaEnforcementSettings(ctx context.Context) (*QuotaEnforcementSettings, error) {
-	value, err := s.getSystemValue(ctx, SystemKeyQuotaEnforcementSettings)
+// InjectUsageCostEnabled reports whether AxonHub should write calculated cost
+// onto client-facing usage.cost. Missing values default to false.
+func (s *SystemService) InjectUsageCostEnabled(ctx context.Context) (bool, error) {
+	value, err := s.getSystemValue(ctx, SystemKeyInjectUsageCost)
 	if err != nil {
 		if ent.IsNotFound(err) {
-			return lo.ToPtr(defaultQuotaEnforcementSettings), nil
+			return false, nil
 		}
 
-		return nil, fmt.Errorf("failed to get quota enforcement settings: %w", err)
+		return false, fmt.Errorf("failed to get inject usage cost: %w", err)
 	}
 
-	var settings QuotaEnforcementSettings
+	return value == "true", nil
+}
+
+// SetInjectUsageCostEnabled sets whether AxonHub injects calculated cost onto
+// client-facing usage.cost.
+func (s *SystemService) SetInjectUsageCostEnabled(ctx context.Context, enabled bool) error {
+	strValue := "false"
+	if enabled {
+		strValue = "true"
+	}
+
+	return s.setSystemValue(ctx, SystemKeyInjectUsageCost, strValue)
+}
+
+// QuotaRoutingSettings retrieves quota routing settings, lazily mapping the legacy
+// quota enforcement setting when the new key is absent.
+func (s *SystemService) QuotaRoutingSettings(ctx context.Context) (*QuotaRoutingSettings, error) {
+	value, err := s.getSystemValue(ctx, SystemKeyQuotaRoutingSettings)
+	if err != nil {
+		if !ent.IsNotFound(err) {
+			return nil, fmt.Errorf("failed to get quota routing settings: %w", err)
+		}
+
+		legacyValue, legacyErr := s.getSystemValue(ctx, legacyQuotaEnforcementSettingsKey)
+		if legacyErr != nil {
+			if ent.IsNotFound(legacyErr) {
+				return lo.ToPtr(defaultQuotaRoutingSettings), nil
+			}
+			return nil, fmt.Errorf("failed to get legacy quota enforcement settings: %w", legacyErr)
+		}
+
+		var legacy legacyQuotaEnforcementSettings
+		if err := json.Unmarshal([]byte(legacyValue), &legacy); err != nil {
+			log.Warn(ctx, "failed to decode legacy quota enforcement settings, using defaults", log.Cause(err))
+			return lo.ToPtr(defaultQuotaRoutingSettings), nil
+		}
+
+		return lo.ToPtr(QuotaRoutingSettings{DefaultMode: quotaRoutingModeFromLegacy(legacy)}), nil
+	}
+
+	var settings QuotaRoutingSettings
 	if err := json.Unmarshal([]byte(value), &settings); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal quota enforcement settings: %w", err)
+		return nil, fmt.Errorf("failed to unmarshal quota routing settings: %w", err)
 	}
-
-	if settings.Mode == "" {
-		settings.Mode = defaultQuotaEnforcementSettings.Mode
+	if settings.DefaultMode == "" {
+		settings.DefaultMode = defaultQuotaRoutingSettings.DefaultMode
+	}
+	if !isQuotaRoutingMode(settings.DefaultMode) {
+		return nil, fmt.Errorf("invalid quota routing mode: %q", settings.DefaultMode)
 	}
 
 	return &settings, nil
 }
 
-// QuotaEnforcementSettingsOrDefault retrieves the quota enforcement settings or returns the default.
-func (s *SystemService) QuotaEnforcementSettingsOrDefault(ctx context.Context) *QuotaEnforcementSettings {
-	settings, err := s.QuotaEnforcementSettings(ctx)
+// QuotaRoutingSettingsOrDefault retrieves quota routing settings or returns the default.
+func (s *SystemService) QuotaRoutingSettingsOrDefault(ctx context.Context) QuotaRoutingSettings {
+	settings, err := s.QuotaRoutingSettings(ctx)
 	if err != nil {
-		log.Warn(ctx, "failed to get quota enforcement settings", log.Cause(err))
-
-		return lo.ToPtr(defaultQuotaEnforcementSettings)
+		log.Warn(ctx, "failed to get quota routing settings", log.Cause(err))
+		return defaultQuotaRoutingSettings
 	}
-
-	return settings
+	return *settings
 }
 
-// SetQuotaEnforcementSettings sets the quota enforcement settings.
-func (s *SystemService) SetQuotaEnforcementSettings(ctx context.Context, settings QuotaEnforcementSettings) error {
-	if settings.Mode == "" {
-		settings.Mode = defaultQuotaEnforcementSettings.Mode
+// SetQuotaRoutingSettings stores quota routing settings.
+func (s *SystemService) SetQuotaRoutingSettings(ctx context.Context, settings QuotaRoutingSettings) error {
+	if settings.DefaultMode == "" {
+		settings.DefaultMode = defaultQuotaRoutingSettings.DefaultMode
 	}
-
-	if settings.Mode != QuotaEnforcementModeExhaustedOnly && settings.Mode != QuotaEnforcementModeDePrioritize {
-		return fmt.Errorf("invalid quota enforcement mode: %q", settings.Mode)
+	if !isQuotaRoutingMode(settings.DefaultMode) {
+		return fmt.Errorf("invalid quota routing mode: %q", settings.DefaultMode)
 	}
 
 	jsonBytes, err := json.Marshal(settings)
 	if err != nil {
-		return fmt.Errorf("failed to marshal quota enforcement settings: %w", err)
+		return fmt.Errorf("failed to marshal quota routing settings: %w", err)
 	}
+	return s.setSystemValue(ctx, SystemKeyQuotaRoutingSettings, string(jsonBytes))
+}
 
-	return s.setSystemValue(ctx, SystemKeyQuotaEnforcementSettings, string(jsonBytes))
+func isQuotaRoutingMode(mode objects.QuotaRoutingMode) bool {
+	switch mode {
+	case objects.QuotaRoutingModeIgnoreQuota,
+		objects.QuotaRoutingModeRemoveOnExhausted,
+		objects.QuotaRoutingModeBackpressure:
+		return true
+	default:
+		return false
+	}
 }
 
 // SecuritySettings retrieves the security settings.

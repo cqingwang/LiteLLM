@@ -86,7 +86,7 @@ func shouldDecodeAnthropicSignature(config *Config) bool {
 	}
 
 	switch config.Type {
-	case "", PlatformDirect, PlatformClaudeCode, PlatformVertex, PlatformBedrock:
+	case "", PlatformDirect, PlatformClaudeCode, PlatformVertex, PlatformBedrock, PlatformCommandCode:
 		return true
 	default:
 		return false
@@ -124,33 +124,74 @@ func buildBaseRequest(chatReq *llm.Request, config *Config) *MessageRequest {
 		req.Metadata = &AnthropicMetadata{UserID: chatReq.Metadata["user_id"]}
 	}
 
+	// Native Anthropic thinking markers recorded by the inbound transformer. They
+	// distinguish "the client natively expressed thinking in Messages format" (must
+	// round-trip verbatim) from "converted request carrying a unified effort level"
+	// (may be re-expressed via output_config.effort / budget tables).
+	thinkingType := ""
+	nativeEffort := ""
+	if chatReq.TransformerMetadata != nil {
+		if v, ok := chatReq.TransformerMetadata[TransformerMetadataKeyThinkingType].(string); ok {
+			thinkingType = v
+		}
+
+		if v, ok := chatReq.TransformerMetadata[TransformerMetadataKeyOutputConfigEffort].(string); ok {
+			nativeEffort = v
+		}
+	}
+
 	// DeepSeek Anthropic format supports output_config.effort. When reasoning_effort
 	// is present, prefer output_config over thinking so suffix-based effort routing
 	// (for example deepseek-chat-max) preserves the explicit effort level.
-	// Note: "none" is not a valid effort value, so skip it (it means disabled thinking).
-	if config != nil && config.Type == PlatformDeepSeek && chatReq.ReasoningEffort != "" && chatReq.ReasoningEffort != "none" {
-		req.OutputConfig = &OutputConfig{Effort: chatReq.ReasoningEffort}
+	// Note: "none" is not a valid effort value, so skip it (it means disabled thinking);
+	// "minimal" is an OpenAI-only level and is normalized to "low".
+	if config != nil && config.Type == PlatformDeepSeek && chatReq.ReasoningEffort != "" && chatReq.ReasoningEffort != llm.ReasoningEffortNone {
+		req.OutputConfig = &OutputConfig{Effort: normalizeAnthropicEffort(chatReq.ReasoningEffort)}
 	}
 
-	// Determine thinking config priority: disabled > adaptive > enabled
-	if chatReq.TransformerMetadata != nil {
-		if v, ok := chatReq.TransformerMetadata[TransformerMetadataKeyThinkingType].(string); ok {
-			switch v {
-			case "disabled":
-				req.Thinking = &Thinking{Type: "disabled"}
-			case "adaptive":
-				req.Thinking = &Thinking{Type: "adaptive"}
-			}
+	// Determine thinking config priority: disabled > adaptive > native budget (enabled)
+	switch thinkingType {
+	case "disabled":
+		req.Thinking = &Thinking{Type: "disabled"}
+	case "adaptive":
+		req.Thinking = &Thinking{Type: "adaptive"}
+	case "enabled":
+		// Native budget client: round-trip budget_tokens verbatim. buildThinking
+		// prefers ReasoningBudget, so no level-to-budget conversion happens here.
+		// DeepSeek's effort representation is output_config.effort. When it has
+		// already been selected above, do not add the native budget form as well;
+		// sending both configurations is rejected by the upstream API.
+		if req.OutputConfig == nil {
+			req.Thinking = buildThinking(chatReq, config)
 		}
 	}
 
 	// Handle ReasoningEffort="none" as disabled thinking (e.g., from OpenAI inbound)
 	// This check is needed when TransformerMetadata is not set but ReasoningEffort is "none"
-	if req.Thinking == nil && chatReq.ReasoningEffort == "none" {
+	if req.Thinking == nil && chatReq.ReasoningEffort == llm.ReasoningEffortNone {
 		req.Thinking = &Thinking{Type: "disabled"}
 	}
 
-	if req.OutputConfig == nil && req.Thinking == nil && chatReq.ReasoningEffort != "none" && (chatReq.ReasoningEffort != "" || chatReq.ReasoningBudget != nil) {
+	// Converted request carrying an explicit effort level: express it directly via
+	// output_config.effort (plus adaptive thinking) instead of converting the level
+	// into a budget. The budget table is only used on platforms without
+	// output_config support, where a budget is the only possible representation.
+	if req.OutputConfig == nil && req.Thinking == nil && nativeEffort == "" &&
+		chatReq.ReasoningEffort != "" && chatReq.ReasoningEffort != llm.ReasoningEffortNone {
+		if supportsOutputConfig(config) {
+			req.OutputConfig = &OutputConfig{Effort: normalizeAnthropicEffort(chatReq.ReasoningEffort)}
+
+			if supportsAdaptiveThinking(config) {
+				req.Thinking = &Thinking{Type: "adaptive"}
+			}
+		} else {
+			req.Thinking = buildThinking(chatReq, config)
+		}
+	}
+
+	// Converted request without an effort level but with an explicit budget:
+	// pass the budget through verbatim.
+	if req.OutputConfig == nil && req.Thinking == nil && chatReq.ReasoningBudget != nil {
 		req.Thinking = buildThinking(chatReq, config)
 	}
 
@@ -163,7 +204,7 @@ func buildBaseRequest(chatReq *llm.Request, config *Config) *MessageRequest {
 
 	// Restore output_config from TransformerMetadata
 	if chatReq.TransformerMetadata != nil {
-		if effort, ok := chatReq.TransformerMetadata[TransformerMetadataKeyOutputConfigEffort].(string); ok && effort != "" {
+		if effort, ok := chatReq.TransformerMetadata[TransformerMetadataKeyOutputConfigEffort].(string); ok && effort != "" && effort != llm.ReasoningEffortNone {
 			if supportsOutputConfig(config) {
 				req.OutputConfig = &OutputConfig{Effort: effort}
 			} else if req.Thinking == nil || req.Thinking.Type == "adaptive" {
@@ -187,16 +228,23 @@ func buildBaseRequest(chatReq *llm.Request, config *Config) *MessageRequest {
 	return req
 }
 
+// defaultAnthropicMaxTokens is used when the client omitted an output limit and
+// no model-card default is available. Anthropic requires max_tokens.
+const defaultAnthropicMaxTokens int64 = 8192
+
 // resolveMaxTokens determines the max_tokens value with fallback.
+// Priority: client max_tokens, client max_completion_tokens, model-card
+// default (TransformOptions.DefaultMaxTokens), then 8192.
 func resolveMaxTokens(chatReq *llm.Request) int64 {
 	switch {
 	case chatReq.MaxTokens != nil:
 		return *chatReq.MaxTokens
 	case chatReq.MaxCompletionTokens != nil:
 		return *chatReq.MaxCompletionTokens
+	case chatReq.TransformOptions.DefaultMaxTokens != nil && *chatReq.TransformOptions.DefaultMaxTokens > 0:
+		return *chatReq.TransformOptions.DefaultMaxTokens
 	default:
-		// Set to 8192 tokens to match common model upper limit.
-		return 8192
+		return defaultAnthropicMaxTokens
 	}
 }
 
@@ -211,7 +259,7 @@ func buildThinking(chatReq *llm.Request, config *Config) *Thinking {
 }
 
 // convertToolsAnthropic converts LLM tools to Anthropic tools.
-// If the platform is not direct Anthropic API or Bedrock, anthropic native tools (like web_search) are filtered out.
+// If the platform does not support Anthropic native tools, tools like web_search are filtered out.
 // Only web_search tool is supported as native tool, other native tools (image_generation, google_*, etc.) are ignored.
 func convertToolsAnthropic(tools []llm.Tool, config *Config) []Tool {
 	if len(tools) == 0 {

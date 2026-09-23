@@ -105,6 +105,11 @@ func ReasoningEffort(v string) predicate.RequestExecution {
 	return predicate.RequestExecution(sql.FieldEQ(FieldReasoningEffort, v))
 }
 
+// ChannelAPIKeySuffix applies equality check predicate on the "channel_api_key_suffix" field. It's identical to ChannelAPIKeySuffixEQ.
+func ChannelAPIKeySuffix(v string) predicate.RequestExecution {
+	return predicate.RequestExecution(sql.FieldEQ(FieldChannelAPIKeySuffix, v))
+}
+
 // ErrorMessage applies equality check predicate on the "error_message" field. It's identical to ErrorMessageEQ.
 func ErrorMessage(v string) predicate.RequestExecution {
 	return predicate.RequestExecution(sql.FieldEQ(FieldErrorMessage, v))
@@ -625,6 +630,91 @@ func ReasoningEffortContainsFold(v string) predicate.RequestExecution {
 	return predicate.RequestExecution(sql.FieldContainsFold(FieldReasoningEffort, v))
 }
 
+// ChannelAPIKeySuffixEQ applies the EQ predicate on the "channel_api_key_suffix" field.
+func ChannelAPIKeySuffixEQ(v string) predicate.RequestExecution {
+	return predicate.RequestExecution(sql.FieldEQ(FieldChannelAPIKeySuffix, v))
+}
+
+// ChannelAPIKeySuffixNEQ applies the NEQ predicate on the "channel_api_key_suffix" field.
+func ChannelAPIKeySuffixNEQ(v string) predicate.RequestExecution {
+	return predicate.RequestExecution(sql.FieldNEQ(FieldChannelAPIKeySuffix, v))
+}
+
+// ChannelAPIKeySuffixIn applies the In predicate on the "channel_api_key_suffix" field.
+func ChannelAPIKeySuffixIn(vs ...string) predicate.RequestExecution {
+	return predicate.RequestExecution(sql.FieldIn(FieldChannelAPIKeySuffix, vs...))
+}
+
+// ChannelAPIKeySuffixNotIn applies the NotIn predicate on the "channel_api_key_suffix" field.
+func ChannelAPIKeySuffixNotIn(vs ...string) predicate.RequestExecution {
+	return predicate.RequestExecution(sql.FieldNotIn(FieldChannelAPIKeySuffix, vs...))
+}
+
+// ChannelAPIKeySuffixGT applies the GT predicate on the "channel_api_key_suffix" field.
+func ChannelAPIKeySuffixGT(v string) predicate.RequestExecution {
+	return predicate.RequestExecution(sql.FieldGT(FieldChannelAPIKeySuffix, v))
+}
+
+// ChannelAPIKeySuffixGTE applies the GTE predicate on the "channel_api_key_suffix" field.
+func ChannelAPIKeySuffixGTE(v string) predicate.RequestExecution {
+	return predicate.RequestExecution(sql.FieldGTE(FieldChannelAPIKeySuffix, v))
+}
+
+// ChannelAPIKeySuffixLT applies the LT predicate on the "channel_api_key_suffix" field.
+func ChannelAPIKeySuffixLT(v string) predicate.RequestExecution {
+	return predicate.RequestExecution(sql.FieldLT(FieldChannelAPIKeySuffix, v))
+}
+
+// ChannelAPIKeySuffixLTE applies the LTE predicate on the "channel_api_key_suffix" field.
+func ChannelAPIKeySuffixLTE(v string) predicate.RequestExecution {
+	return predicate.RequestExecution(sql.FieldLTE(FieldChannelAPIKeySuffix, v))
+}
+
+// ChannelAPIKeySuffixContains applies the Contains predicate on the "channel_api_key_suffix" field.
+func ChannelAPIKeySuffixContains(v string) predicate.RequestExecution {
+	return predicate.RequestExecution(sql.FieldContains(FieldChannelAPIKeySuffix, v))
+}
+
+// ChannelAPIKeySuffixHasPrefix applies the HasPrefix predicate on the "channel_api_key_suffix" field.
+func ChannelAPIKeySuffixHasPrefix(v string) predicate.RequestExecution {
+	return predicate.RequestExecution(sql.FieldHasPrefix(FieldChannelAPIKeySuffix, v))
+}
+
+// ChannelAPIKeySuffixHasSuffix applies the HasSuffix predicate on the "channel_api_key_suffix" field.
+func ChannelAPIKeySuffixHasSuffix(v string) predicate.RequestExecution {
+	return predicate.RequestExecution(sql.FieldHasSuffix(FieldChannelAPIKeySuffix, v))
+}
+
+// ChannelAPIKeySuffixIsNil applies the IsNil predicate on the "channel_api_key_suffix" field.
+func ChannelAPIKeySuffixIsNil() predicate.RequestExecution {
+	return predicate.RequestExecution(sql.FieldIsNull(FieldChannelAPIKeySuffix))
+}
+
+// ChannelAPIKeySuffixNotNil applies the NotNil predicate on the "channel_api_key_suffix" field.
+func ChannelAPIKeySuffixNotNil() predicate.RequestExecution {
+	return predicate.RequestExecution(sql.FieldNotNull(FieldChannelAPIKeySuffix))
+}
+
+// ChannelAPIKeySuffixEqualFold applies the EqualFold predicate on the "channel_api_key_suffix" field.
+func ChannelAPIKeySuffixEqualFold(v string) predicate.RequestExecution {
+	return predicate.RequestExecution(sql.FieldEqualFold(FieldChannelAPIKeySuffix, v))
+}
+
+// ChannelAPIKeySuffixContainsFold applies the ContainsFold predicate on the "channel_api_key_suffix" field.
+func ChannelAPIKeySuffixContainsFold(v string) predicate.RequestExecution {
+	return predicate.RequestExecution(sql.FieldContainsFold(FieldChannelAPIKeySuffix, v))
+}
+
+// ResponseHeadersIsNil applies the IsNil predicate on the "response_headers" field.
+func ResponseHeadersIsNil() predicate.RequestExecution {
+	return predicate.RequestExecution(sql.FieldIsNull(FieldResponseHeaders))
+}
+
+// ResponseHeadersNotNil applies the NotNil predicate on the "response_headers" field.
+func ResponseHeadersNotNil() predicate.RequestExecution {
+	return predicate.RequestExecution(sql.FieldNotNull(FieldResponseHeaders))
+}
+
 // ResponseBodyIsNil applies the IsNil predicate on the "response_body" field.
 func ResponseBodyIsNil() predicate.RequestExecution {
 	return predicate.RequestExecution(sql.FieldIsNull(FieldResponseBody))
@@ -958,16 +1048,6 @@ func RequestHeadersIsNil() predicate.RequestExecution {
 // RequestHeadersNotNil applies the NotNil predicate on the "request_headers" field.
 func RequestHeadersNotNil() predicate.RequestExecution {
 	return predicate.RequestExecution(sql.FieldNotNull(FieldRequestHeaders))
-}
-
-// ResponseHeadersIsNil applies the IsNil predicate on the "response_headers" field.
-func ResponseHeadersIsNil() predicate.RequestExecution {
-	return predicate.RequestExecution(sql.FieldIsNull(FieldResponseHeaders))
-}
-
-// ResponseHeadersNotNil applies the NotNil predicate on the "response_headers" field.
-func ResponseHeadersNotNil() predicate.RequestExecution {
-	return predicate.RequestExecution(sql.FieldNotNull(FieldResponseHeaders))
 }
 
 // RequestURLEQ applies the EQ predicate on the "request_url" field.
